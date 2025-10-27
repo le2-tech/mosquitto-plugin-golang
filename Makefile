@@ -37,4 +37,4 @@ docker-run:
 	  eclipse-mosquitto:2
 
 local-run: build
-	mosquitto -c ./mosquitto.conf
+	mosquitto -c ./mosquitto.conf -v

@@ -218,10 +218,11 @@ func acl_check_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Poin
 	ed := (*C.struct_mosquitto_evt_acl_check)(event_data)
 	username := cstr(C.mosquitto_client_username(ed.client))
 	clientID := cstr(C.mosquitto_client_id(ed.client))
+	ipAddr := cstr(C.mosquitto_client_address(ed.client))
 	topic := cstr(ed.topic)
 	access := int(ed.access) // READ=1, WRITE=2, SUBSCRIBE=4
 
-	allow, err := dbACL(username, clientID, topic, access)
+	allow, err := dbACL(username, clientID, ipAddr, topic, access)
 	if err != nil {
 		mosqLog(C.MOSQ_LOG_WARNING, "mosq-pg acl error: "+err.Error())
 		if failOpen {
@@ -284,31 +285,29 @@ func dbAuth(username, password, clientID string) (bool, error) {
 	return true, nil
 }
 
-func dbACL(username, clientID, topic string, access int) (bool, error) {
-	if username == "" || topic == "" {
-		return false, nil
-	}
-	ctx, cancel := ctxTimeout()
-	defer cancel()
+func dbACL(username, _ string, ipAddr, topic string, access int) (bool, error) {
+	isSubscribe := access&4 != 0
 
-	rows, err := pool.Query(ctx,
-		"SELECT pattern, acc FROM acls WHERE username=$1 OR username='*'", username)
-	if err != nil {
-		return false, err
+	// Allow dashboard user to subscribe to $SYS/#.
+	if username == "dashboard" && isSubscribe && topic == "$SYS/#" {
+		return true, nil
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var pattern string
-		var acc int
-		if err := rows.Scan(&pattern, &acc); err != nil {
-			continue
-		}
-		if acc&access != 0 && mqttMatch(pattern, topic, username, clientID) {
-			return true, nil
+	// Allow all operations for clients connected from 127.0.0.1.
+	if ipAddr == "127.0.0.1" {
+		return true, nil
+	}
+
+	// Deny subscriptions to critical system wildcards for everyone else.
+	if isSubscribe {
+		switch topic {
+		case "$SYS/#", "#", "+/#":
+			return false, nil
 		}
 	}
-	return false, nil
+
+	// Default allow.
+	return true, nil
 }
 
 func mqttMatch(pattern, topic, username, clientID string) bool {
