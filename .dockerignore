@@ -1,0 +1,19 @@
+# Version control
+.git
+.gitignore
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build artifacts
+build/
+*.so
+*.dylib
+*.dll
+
+# OS junk
+.DS_Store
+Thumbs.db
