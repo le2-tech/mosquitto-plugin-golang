@@ -1,4 +1,4 @@
-module mosq
+module auth-plugin
 
 go 1.23.0
 

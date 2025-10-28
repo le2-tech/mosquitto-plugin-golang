@@ -14,7 +14,7 @@ WORKDIR /src
 COPY go.mod .
 RUN go mod download
 COPY . .
-RUN make build bcryptgen
+RUN make build-prod bcryptgen
 
 
 # https://packages.debian.org/search?keywords=mosquitto
@@ -27,6 +27,18 @@ RUN set -eux; \
     ; \
     rm -rf /var/lib/apt/lists/*
 
-# Copy plugin and example config into the image
-COPY --from=build /src/build/mosq_pg_auth.so /mosquitto/plugins/mosq_pg_auth.so
 
+RUN set -eux; \
+    install -d -o mosquitto -g mosquitto -m 755 \
+      /mosquitto/config /mosquitto/data /mosquitto/log /mosquitto/plugins
+
+# Copy plugin and example config into the image
+COPY --from=build --chown=mosquitto:mosquitto /src/build/ /mosquitto/plugins/
+
+#COPY docker-entrypoint.sh /
+#ENTRYPOINT ["/docker-entrypoint.sh"]
+#EXPOSE 1883
+
+USER mosquitto
+
+CMD ["mosquitto"]

@@ -149,7 +149,7 @@ func ensurePool(ctx context.Context) (*pgxpool.Pool, error) {
 		return nil, err
 	}
 	pool = newPool
-	mosqLog(C.MOSQ_LOG_INFO, "mosq-pg: connected to PostgreSQL successfully")
+	mosqLog(C.MOSQ_LOG_INFO, "auth-plugin: connected to PostgreSQL successfully")
 	return pool, nil
 }
 
@@ -178,7 +178,7 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 
 	defer func() {
 		if r := recover(); r != nil {
-			mosqLog(C.MOSQ_LOG_ERR, "mosq-pg: panic in plugin_init: %v\n%s", r, string(debug.Stack()))
+			mosqLog(C.MOSQ_LOG_ERR, "auth-plugin: panic in plugin_init: %v\n%s", r, string(debug.Stack()))
 			rc = C.MOSQ_ERR_UNKNOWN
 		}
 	}()
@@ -195,42 +195,42 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 			if dur, ok := parseTimeoutMS(v); ok {
 				timeout = dur
 			} else {
-				mosqLog(C.MOSQ_LOG_WARNING, "mosq-pg: invalid timeout_ms=%q, keeping existing value %dms",
+				mosqLog(C.MOSQ_LOG_WARNING, "auth-plugin: invalid timeout_ms=%q, keeping existing value %dms",
 					v, int(timeout/time.Millisecond))
 			}
 		case "fail_open":
 			if parsed, ok := parseBoolOption(v); ok {
 				failOpen = parsed
 			} else {
-				mosqLog(C.MOSQ_LOG_WARNING, "mosq-pg: invalid fail_open=%q, keeping existing value %t",
+				mosqLog(C.MOSQ_LOG_WARNING, "auth-plugin: invalid fail_open=%q, keeping existing value %t",
 					v, failOpen)
 			}
 		case "enforce_bind":
 			if parsed, ok := parseBoolOption(v); ok {
 				enforceBind = parsed
 			} else {
-				mosqLog(C.MOSQ_LOG_WARNING, "mosq-pg: invalid enforce_bind=%q, keeping existing value %t",
+				mosqLog(C.MOSQ_LOG_WARNING, "auth-plugin: invalid enforce_bind=%q, keeping existing value %t",
 					v, enforceBind)
 			}
 		}
 	}
 	if pgDSN == "" {
-		mosqLog(C.MOSQ_LOG_ERR, "mosq-pg: pg_dsn must be set")
+		mosqLog(C.MOSQ_LOG_ERR, "auth-plugin: pg_dsn must be set")
 		return C.MOSQ_ERR_UNKNOWN
 	}
 
-	mosqLog(C.MOSQ_LOG_INFO, "mosq-pg: initializing pg_dsn=%s timeout_ms=%d fail_open=%t enforce_bind=%t",
+	mosqLog(C.MOSQ_LOG_INFO, "auth-plugin: initializing pg_dsn=%s timeout_ms=%d fail_open=%t enforce_bind=%t",
 		safeDSN(pgDSN), int(timeout/time.Millisecond), failOpen, enforceBind)
 
 	// 验证 PG 配置；数据库暂不可用时不阻塞插件加载
 	if _, err := poolConfig(); err != nil {
-		mosqLog(C.MOSQ_LOG_ERR, "mosq-pg: invalid pg_dsn (%s): %v", safeDSN(pgDSN), err)
+		mosqLog(C.MOSQ_LOG_ERR, "auth-plugin: invalid pg_dsn (%s): %v", safeDSN(pgDSN), err)
 		return C.MOSQ_ERR_UNKNOWN
 	}
 	ctx, cancel := ctxTimeout()
 	defer cancel()
 	if _, err := ensurePool(ctx); err != nil {
-		mosqLog(C.MOSQ_LOG_WARNING, "mosq-pg: initial pg connection failed: %v (will retry lazily)", err)
+		mosqLog(C.MOSQ_LOG_WARNING, "auth-plugin: initial pg connection failed: %v (will retry lazily)", err)
 	}
 
 	// 注册回调
@@ -238,7 +238,7 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 		return rc
 	}
 
-	mosqLog(C.MOSQ_LOG_INFO, "mosq-pg: plugin initialized")
+	mosqLog(C.MOSQ_LOG_INFO, "auth-plugin: plugin initialized")
 	return C.MOSQ_ERR_SUCCESS
 }
 
@@ -255,7 +255,7 @@ func go_mosq_plugin_cleanup(userdata unsafe.Pointer, opts *C.struct_mosquitto_op
 		pool = nil
 	}
 	poolMu.Unlock()
-	mosqLog(C.MOSQ_LOG_INFO, "mosq-pg: plugin cleaned up")
+	mosqLog(C.MOSQ_LOG_INFO, "auth-plugin: plugin cleaned up")
 	return C.MOSQ_ERR_SUCCESS
 }
 
@@ -269,9 +269,9 @@ func basic_auth_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Poi
 
 	allow, err := dbAuth(username, password, clientID)
 	if err != nil {
-		mosqLog(C.MOSQ_LOG_WARNING, "mosq-pg auth error: "+err.Error())
+		mosqLog(C.MOSQ_LOG_WARNING, "auth-plugin auth error: "+err.Error())
 		if failOpen {
-			mosqLog(C.MOSQ_LOG_INFO, "mosq-pg: fail_open=true, allowing auth despite error")
+			mosqLog(C.MOSQ_LOG_INFO, "auth-plugin: fail_open=true, allowing auth despite error")
 			return C.MOSQ_ERR_SUCCESS
 		}
 		return C.MOSQ_ERR_AUTH
@@ -343,4 +343,6 @@ func dbAuth(username, password, clientID string) (bool, error) {
 	return true, nil
 }
 
-func main() {}
+func main() {
+	println("hit! pid:", os.Getpid())
+}
