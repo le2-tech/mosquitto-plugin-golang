@@ -1,6 +1,8 @@
-name: Build & Push Docker image (GHCR, hosted runners, temp-tags manifest)
+name: Build & Push Docker image (GHCR, temp-tags manifest)
 
 on:
+  schedule:
+    - cron: "0 0 * * 2,5"
   push:
     branches: [ "main" ]
     tags: [ "v*" ]
@@ -51,6 +53,8 @@ jobs:
     runs-on: ${{ matrix.runs_on }}
     steps:
       - uses: actions/checkout@main
+        with:
+          fetch-depth: 0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@master
@@ -68,6 +72,7 @@ jobs:
         uses: docker/build-push-action@master
         with:
           context: .
+          file: ./Dockerfile
           platforms: ${{ matrix.platform }} # 原生构建，无 QEMU
           push: ${{ github.event_name != 'pull_request' }}
           # 临时标签，用于后续合成 manifest
@@ -75,7 +80,7 @@ jobs:
           labels: ${{ needs.meta.outputs.labels }}
           # 官方 runner 用 gha 缓存即可
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,version=2,mode=min
           sbom: true
           provenance: true
 
