@@ -5,6 +5,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DOWNLOAD_SHA256=2f752589ef7db40260b633fbdb536e9a04b446a315138d64a7ff3c14e2de6b68 \
     GPG_KEYS=A0D6EEA1DCAE49A635A3B2F0779B22DFB3E717B7
 
+ARG APP_ENV=prod
+
+RUN set -eux; \
+  if [ "${APP_ENV:-}" = "dev" ]; then \
+  sed -i "s|http://deb.debian.org|http://mirrors.aliyun.com|g" /etc/apt/sources.list.d/debian.sources; \
+  fi
+
 # 构建依赖（使用 Debian 组件提供的 libwebsockets-dev）
 RUN set -eux; \
     apt-get update; \
@@ -83,7 +90,7 @@ WORKDIR /src
 COPY go.mod .
 RUN go mod download
 COPY . .
-RUN make build-prod
+RUN make build
 
 
 # https://packages.debian.org/search?keywords=mosquitto

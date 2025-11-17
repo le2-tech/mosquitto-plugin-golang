@@ -2,7 +2,7 @@
 BINARY_DIR := build
 SO := $(BINARY_DIR)/
 BCRYPT := $(BINARY_DIR)/bcryptgen
-DOCKER_IMAGE := coolcry/mosquitto:latest
+DOCKER_IMAGE := ghcr.io/le2-tech/mosquitto
 
 GOFLAGS :=
 CGO_ENABLED := 1
@@ -14,11 +14,11 @@ all: build bcryptgen
 mod:
 	go mod tidy
 
-build: clean mod
+build-dev: clean mod
 	mkdir -p $(BINARY_DIR)
 	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -gcflags "all=-N -l" -ldflags "" -o $(SO) .
 
-build-prod: clean mod
+build: clean mod
 	mkdir -p $(BINARY_DIR)
 	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o $(SO) .
 
@@ -30,11 +30,11 @@ clean:
 	rm -rf $(BINARY_DIR)
 
 local-run: build
-	mosquitto -c ./mosquitto.conf -v
+	PG_DSN=postgres://iot:ZDZrMegCF0i-saVU@127.0.0.1:5433/iot?sslmode=disable mosquitto -c ./mosquitto.conf -v
 
 # Build a runnable Mosquitto image with the plugin baked in
-docker-build:
-	docker build -f Dockerfile -t coolcry/mosquitto:latest .
+docker-build-dev:
+	docker build . -f Dockerfile --build-arg APP_ENV=dev -t $(DOCKER_IMAGE)
 
 docker-bash:
 	docker run --rm -it $(DOCKER_IMAGE) bash
