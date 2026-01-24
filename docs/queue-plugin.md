@@ -1,6 +1,6 @@
 # 消息推送队列插件（RabbitMQ 设计说明）
 
-本文档描述**计划新增**的 Mosquitto 插件：把 Broker 收到的消息推送到 RabbitMQ。当前为设计说明，确认后再进入实现。
+本文档描述新增的 Mosquitto 插件：把 Broker 收到的消息推送到 RabbitMQ，用作实现依据。
 
 ## 1. 决策摘要
 
@@ -8,7 +8,7 @@
 - Exchange：`direct`，Routing key 由配置项指定。
 - Queue：由运维预创建并绑定，插件不声明/不绑定。
 - 消息格式：固定为 JSON + base64（payload 置于 `payload_b64`）。
-- MQTT v5 properties：不携带。
+- MQTT v5 properties：仅携带 `user_properties`。
 - 过滤策略：支持 include/exclude；默认排除 `$SYS/#`；`exclude_*` 高于 `include_*`；默认不推送 retain。
 - 发送策略：回调内直接发送，短超时，失败默认丢弃（`fail_mode=drop`）。
 
@@ -16,7 +16,7 @@
 
 ### 2.1 事件触发
 
-- 使用 Mosquitto 插件事件中的“消息进入 Broker”回调（以 `mosquitto_plugin.h` 为准）。
+- 使用 Mosquitto 插件事件中的消息回调（`MOSQ_EVT_MESSAGE`，以 `mosquitto_plugin.h` 为准）。
 - 仅处理**客户端上行** PUBLISH，不处理 Broker 向订阅者的下行消息。
 
 ### 2.2 数据流
@@ -25,7 +25,7 @@
 MQTT Client
     │ PUBLISH
     ▼
-Mosquitto (message_in 事件)
+Mosquitto (MOSQ_EVT_MESSAGE)
     │
     ├─(快速过滤/拷贝 payload)
     │
@@ -47,7 +47,8 @@ Mosquitto (message_in 事件)
   "client_id": "client-1",
   "username": "alice",
   "peer": "192.168.1.10:52344",
-  "protocol": "MQTT/3.1.1"
+  "protocol": "MQTT/3.1.1",
+  "user_properties": [{"k": "rr", "v": "bbb"}]
 }
 ```
 
@@ -60,6 +61,7 @@ Mosquitto (message_in 事件)
 
 - `listener_port`：Broker 监听端口（如可获得）。
 - `msg_id`：消息追踪 ID（如需）。
+- `user_properties`：MQTT v5 用户属性（键值对列表），仅在存在时输出。
 
 ## 4. 过滤与路由策略
 
@@ -87,7 +89,7 @@ Mosquitto (message_in 事件)
 
 连接与路由：
 - `plugin_opt_queue_backend`：固定 `rabbitmq`。
-- `plugin_opt_queue_dsn`：AMQP 连接串。
+- `plugin_opt_queue_dsn`：AMQP 连接串（可由环境变量 `QUEUE_DSN` 提供默认值，`plugin_opt_*` 优先）。
 - `plugin_opt_queue_exchange`：Exchange 名称。
 - `plugin_opt_queue_exchange_type`：固定 `direct`。
 - `plugin_opt_queue_routing_key`：Routing key（默认空）。
@@ -97,6 +99,7 @@ Mosquitto (message_in 事件)
 - `plugin_opt_queue_timeout_ms`：发送超时（默认 1000）。
 - `plugin_opt_queue_fail_mode`：`drop`/`block`/`disconnect`（默认 `drop`）。
 - `plugin_opt_payload_encoding`：固定 `base64`。
+- `plugin_opt_queue_debug`：调试日志开关（默认 false，需配合 Mosquitto `log_type debug`）。
 
 过滤：
 - `plugin_opt_include_topics`：多个 topic 逗号分隔（默认空）。
@@ -149,12 +152,9 @@ plugin_opt_payload_encoding base64
 
 ```
 .
-├── queue_bridge.c           # C 侧入口与包装函数（独立于 auth 插件）
-├── queue_plugin.go          # Go 插件实现
-├── queue/                   # RabbitMQ 适配器
-│   ├── interface.go
-│   └── ...
-└── cmd/queue-plugin/         # 若需要独立 main 入口
+├── queueplugin/
+│   ├── queue_bridge.c        # C 侧入口与包装函数
+│   └── queue_plugin.go       # Go 插件实现
 ```
 
 构建目标示例：

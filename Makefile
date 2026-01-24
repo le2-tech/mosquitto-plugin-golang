@@ -7,7 +7,7 @@ DOCKER_IMAGE := ghcr.io/le2-tech/mosquitto
 GOFLAGS :=
 CGO_ENABLED := 1
 
-.PHONY: all build bcryptgen clean docker-build docker-run mod
+.PHONY: all build build-queue bcryptgen clean docker-build docker-run mod
 
 all: build bcryptgen
 
@@ -22,6 +22,10 @@ build: clean mod
 	mkdir -p $(BINARY_DIR)
 	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o $(SO) .
 
+build-queue: mod
+	mkdir -p $(BINARY_DIR)
+	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o $(BINARY_DIR)/queue-plugin ./queueplugin
+
 bcryptgen:
 	mkdir -p $(BINARY_DIR)
 	go build -o $(BINARY_DIR)/bcryptgen ./cmd/bcryptgen
@@ -29,8 +33,8 @@ bcryptgen:
 clean:
 	rm -rf $(BINARY_DIR)
 
-local-run: build
-	PG_DSN=postgres://iot:ZDZrMegCF0i-saVU@127.0.0.1:5433/iot?sslmode=disable mosquitto -c ./mosquitto.conf -v
+local-run: build build-queue
+	PG_DSN=postgres://iot:ZDZrMegCF0i-saVU@127.0.0.1:5433/iot?sslmode=disable QUEUE_DSN=amqp://rabbitmq_user:passwd@127.0.0.1:7772/ mosquitto -c ./mosquitto.conf -v
 
 # Build a runnable Mosquitto image with the plugin baked in
 docker-build-dev:
@@ -45,4 +49,3 @@ docker-run:
 	  --network host \
 	  -v $(PWD)/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro \
 	  $(DOCKER_IMAGE) mosquitto -c /mosquitto/config/mosquitto.conf
-
