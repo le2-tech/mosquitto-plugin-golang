@@ -1,6 +1,7 @@
 #SHELL := /bin/bash
 BINARY_DIR := build
-SO := $(BINARY_DIR)/
+AUTH_SO := $(BINARY_DIR)/auth-plugin
+QUEUE_SO := $(BINARY_DIR)/queue-plugin
 BCRYPT := $(BINARY_DIR)/bcryptgen
 DOCKER_IMAGE := ghcr.io/le2-tech/mosquitto
 
@@ -16,15 +17,15 @@ mod:
 
 build-dev: clean mod
 	mkdir -p $(BINARY_DIR)
-	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -gcflags "all=-N -l" -ldflags "" -o $(SO) .
+	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -gcflags "all=-N -l" -ldflags "" -o $(AUTH_SO) ./authplugin
 
 build: clean mod
 	mkdir -p $(BINARY_DIR)
-	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o $(SO) .
+	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o $(AUTH_SO) ./authplugin
 
 build-queue: mod
 	mkdir -p $(BINARY_DIR)
-	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o $(BINARY_DIR)/queue-plugin ./queueplugin
+	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o $(QUEUE_SO) ./queueplugin
 
 bcryptgen:
 	mkdir -p $(BINARY_DIR)

@@ -1,12 +1,12 @@
 # 当前实现说明（Mosquitto v5 插件：Go + PostgreSQL）
 
-本文档描述代码的**当前实际实现**，用于后续在此基础上扩展功能。内容以源码为准（主要是 `bridge.c` 与 `plugin.go`），并指出与现有脚本/历史文档的不一致之处，避免后续开发踩坑。`README.md` 已移除，以本文为准。
+本文档描述代码的**当前实际实现**，用于后续在此基础上扩展功能。内容以源码为准（主要是 `authplugin/bridge.c` 与 `authplugin/plugin.go`），并指出与现有脚本/历史文档的不一致之处，避免后续开发踩坑。`README.md` 已移除，以本文为准。
 
 当前功能范围（实现层面）：仅处理 CONNECT 认证（BASIC_AUTH），ACL 未启用；认证数据来源 PostgreSQL，不经 HTTP。
 
 ## 1. 组件与职责
 
-### 1.1 C 桥接层（`bridge.c`）
+### 1.1 C 桥接层（`authplugin/bridge.c`）
 
 - 提供 Mosquitto 要求的三个入口函数：
   - `mosquitto_plugin_version`
@@ -17,7 +17,7 @@
   - `register_event_callback` / `unregister_event_callback`：封装 `mosquitto_callback_register` / `mosquitto_callback_unregister`。
   - `go_mosq_log`：封装 `mosquitto_log_printf`（避免 Go 直接处理 C 变参）。
 
-### 1.2 Go 插件（`plugin.go`）
+### 1.2 Go 插件（`authplugin/plugin.go`）
 
 - 实现认证逻辑（BASIC_AUTH）。
 - 提供事件回调：`basic_auth_cb_c` 与 `acl_check_cb_c`（当前 **仅注册** BASIC_AUTH）。
@@ -160,8 +160,9 @@
 
 ```
 .
-├── bridge.c              # C 侧入口与包装函数
-├── plugin.go             # Go 插件实现（BASIC_AUTH -> PostgreSQL）
+├── authplugin/
+│   ├── bridge.c          # C 侧入口与包装函数
+│   └── plugin.go         # Go 插件实现（BASIC_AUTH -> PostgreSQL）
 ├── cmd/bcryptgen/main.go # sha256(password+salt) 生成器
 ├── scripts/
 │   ├── init_db.sql       # 旧版 schema（users/acls/client_bindings）
@@ -271,7 +272,7 @@ plugin /mosquitto/plugins/auth-plugin
 
 ## 13. 现有测试
 
-- `plugin_test.go` 覆盖的仅是工具函数：
+- `authplugin/plugin_test.go` 覆盖的仅是工具函数：
   - `parseBoolOption`
   - `parseTimeoutMS`
   - `safeDSN`
