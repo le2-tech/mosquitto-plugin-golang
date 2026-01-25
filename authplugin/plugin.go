@@ -52,6 +52,54 @@ var (
 	enforceBind bool
 )
 
+const (
+	authResultSuccess = "success"
+	authResultFail    = "fail"
+
+	authReasonOK               = "ok"
+	authReasonMissingCreds     = "missing_credentials"
+	authReasonUserNotFound     = "user_not_found"
+	authReasonUserDisabled     = "user_disabled"
+	authReasonInvalidPassword  = "invalid_password"
+	authReasonClientNotBound   = "client_not_bound"
+	authReasonDBError          = "db_error"
+	authReasonDBErrorFailOpen  = "db_error_fail_open"
+)
+
+const (
+	connEventTypeConnect = "connect"
+)
+
+const insertAuthEventSQL = `
+INSERT INTO mqtt_client_auth_events
+  (ts, result, reason, client_id, username, peer, protocol)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+`
+
+const recordConnEventSQL = `
+WITH ins AS (
+  INSERT INTO mqtt_client_events
+    (ts, event_type, client_id, username, peer, protocol, reason_code, extra)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+  RETURNING 1
+)
+INSERT INTO mqtt_client_latest_events
+  (client_id, username, last_event_ts, last_event_type, last_connect_ts, last_disconnect_ts,
+   last_peer, last_protocol, last_reason_code, extra)
+SELECT $3, $4, $1, $2, $9, $10, $5, $6, $7, $8
+FROM ins
+ON CONFLICT (client_id) DO UPDATE SET
+  username = EXCLUDED.username,
+  last_event_ts = EXCLUDED.last_event_ts,
+  last_event_type = EXCLUDED.last_event_type,
+  last_connect_ts = EXCLUDED.last_connect_ts,
+  last_disconnect_ts = EXCLUDED.last_disconnect_ts,
+  last_peer = EXCLUDED.last_peer,
+  last_protocol = EXCLUDED.last_protocol,
+  last_reason_code = EXCLUDED.last_reason_code,
+  extra = EXCLUDED.extra
+`
+
 func mosqLog(level C.int, msg string, args ...any) {
 	if len(args) > 0 {
 		msg = fmt.Sprintf(msg, args...)
@@ -67,6 +115,30 @@ func cstr(s *C.char) string {
 	}
 	return C.GoString(s)
 }
+
+type clientInfo struct {
+	clientID string
+	username string
+	peer     string
+	protocol string
+}
+
+func clientInfoFromBasicAuth(ed *C.struct_mosquitto_evt_basic_auth) clientInfo {
+	info := clientInfo{
+		username: cstr(ed.username),
+	}
+	if ed.client == nil {
+		return info
+	}
+	info.clientID = cstr(C.mosquitto_client_id(ed.client))
+	if info.username == "" {
+		info.username = cstr(C.mosquitto_client_username(ed.client))
+	}
+	info.peer = cstr(C.mosquitto_client_address(ed.client))
+	info.protocol = protocolString(int(C.mosquitto_client_protocol_version(ed.client)))
+	return info
+}
+
 func envBool(name string) bool {
 	if v, ok := parseBoolOption(os.Getenv(name)); ok {
 		return v
@@ -87,6 +159,13 @@ func safeDSN(dsn string) string {
 		}
 	}
 	return u.String()
+}
+
+func optionalString(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func parseBoolOption(v string) (value bool, ok bool) {
@@ -156,6 +235,19 @@ func ensurePool(ctx context.Context) (*pgxpool.Pool, error) {
 func sha256PwdSalt(pwd, salt string) string {
 	sum := sha256.Sum256([]byte(pwd + salt))
 	return hex.EncodeToString(sum[:])
+}
+
+func protocolString(version int) string {
+	switch version {
+	case 3:
+		return "MQTT/3.1"
+	case 4:
+		return "MQTT/3.1.1"
+	case 5:
+		return "MQTT/5.0"
+	default:
+		return ""
+	}
 }
 
 // --- Version negotiation ---
@@ -269,19 +361,32 @@ func go_mosq_plugin_cleanup(userdata unsafe.Pointer, opts *C.struct_mosquitto_op
 //export basic_auth_cb_c
 func basic_auth_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Pointer) C.int {
 	ed := (*C.struct_mosquitto_evt_basic_auth)(event_data)
-	username, password := cstr(ed.username), cstr(ed.password)
-	clientID := cstr(C.mosquitto_client_id(ed.client))
+	password := cstr(ed.password)
+	info := clientInfoFromBasicAuth(ed)
 
-	allow, err := dbAuth(username, password, clientID)
+	allow, reason, err := dbAuth(info.username, password, info.clientID)
+	result := authResultFail
+	finalReason := reason
 	if err != nil {
 		mosqLog(C.MOSQ_LOG_WARNING, "auth-plugin auth error: "+err.Error())
 		if failOpen {
 			mosqLog(C.MOSQ_LOG_INFO, "auth-plugin: fail_open=true, allowing auth despite error")
-			return C.MOSQ_ERR_SUCCESS
+			allow = true
+			result = authResultSuccess
+			finalReason = authReasonDBErrorFailOpen
+		} else {
+			finalReason = authReasonDBError
 		}
-		return C.MOSQ_ERR_AUTH
+	} else if allow {
+		result = authResultSuccess
+	}
+	if err := recordAuthEvent(info, result, finalReason); err != nil {
+		mosqLog(C.MOSQ_LOG_WARNING, "auth-plugin auth event log failed: %v", err)
 	}
 	if allow {
+		if err := recordConnectEvent(info); err != nil {
+			mosqLog(C.MOSQ_LOG_WARNING, "auth-plugin connect event log failed: %v", err)
+		}
 		return C.MOSQ_ERR_SUCCESS
 	}
 	return C.MOSQ_ERR_AUTH
@@ -301,16 +406,16 @@ func ctxTimeout() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), timeout)
 }
 
-func dbAuth(username, password, clientID string) (bool, error) {
+func dbAuth(username, password, clientID string) (bool, string, error) {
 	if username == "" || password == "" {
-		return false, nil
+		return false, authReasonMissingCreds, nil
 	}
 	ctx, cancel := ctxTimeout()
 	defer cancel()
 
 	p, err := ensurePool(ctx)
 	if err != nil {
-		return false, err
+		return false, authReasonDBError, err
 	}
 
 	var hash string
@@ -321,16 +426,16 @@ func dbAuth(username, password, clientID string) (bool, error) {
 		username).Scan(&hash, &salt, &enabledInt)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+		return false, authReasonUserNotFound, nil
 	}
 	if err != nil {
-		return false, err
+		return false, authReasonDBError, err
 	}
 	if enabledInt == 0 {
-		return false, nil
+		return false, authReasonUserDisabled, nil
 	}
 	if hash != sha256PwdSalt(password, salt) {
-		return false, nil
+		return false, authReasonInvalidPassword, nil
 	}
 
 	if enforceBind {
@@ -339,13 +444,53 @@ func dbAuth(username, password, clientID string) (bool, error) {
 			"SELECT 1 FROM client_bindings WHERE username=$1 AND client_id=$2",
 			username, clientID).Scan(&ok)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
+			return false, authReasonClientNotBound, nil
 		}
 		if err != nil {
-			return false, err
+			return false, authReasonDBError, err
 		}
 	}
-	return true, nil
+	return true, authReasonOK, nil
+}
+
+func recordAuthEvent(info clientInfo, result, reason string) error {
+	ctx, cancel := ctxTimeout()
+	defer cancel()
+
+	p, err := ensurePool(ctx)
+	if err != nil {
+		return err
+	}
+
+	ts := time.Now().UTC()
+
+	_, err = p.Exec(ctx, insertAuthEventSQL, ts, result, reason,
+		optionalString(info.clientID), optionalString(info.username), optionalString(info.peer), optionalString(info.protocol))
+	return err
+}
+
+func recordConnectEvent(info clientInfo) error {
+	ctx, cancel := ctxTimeout()
+	defer cancel()
+
+	p, err := ensurePool(ctx)
+	if err != nil {
+		return err
+	}
+
+	ts := time.Now().UTC()
+	eventType := connEventTypeConnect
+	userVal := optionalString(info.username)
+	peerVal := optionalString(info.peer)
+	protocolVal := optionalString(info.protocol)
+	var reasonVal any
+	var extraVal any
+
+	connectTS := ts
+	var disconnectTS any
+	_, err = p.Exec(ctx, recordConnEventSQL, ts, eventType, info.clientID, userVal, peerVal, protocolVal, reasonVal, extraVal,
+		connectTS, disconnectTS)
+	return err
 }
 
 func main() {

@@ -90,7 +90,7 @@ WORKDIR /src
 COPY go.mod .
 RUN go mod download
 COPY . .
-RUN make build-auth build-queue
+RUN make build-auth build-queue build-conn
 
 
 # https://packages.debian.org/search?keywords=mosquitto

@@ -7,7 +7,7 @@ WORKDIR /src
 COPY go.mod .
 RUN go mod download
 COPY . .
-RUN make build-auth build-queue bcryptgen
+RUN make build-auth build-queue build-conn bcryptgen
 
 FROM eclipse-mosquitto:2
 

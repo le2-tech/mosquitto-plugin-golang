@@ -1,6 +1,7 @@
 # Version control
 .git
 .gitignore
+.github
 
 # Editors and IDEs
 .idea/
@@ -9,7 +10,7 @@
 *.swo
 
 # Build artifacts
-build/
+plugins/
 *.so
 *.dylib
 *.dll
