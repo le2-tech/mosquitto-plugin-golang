@@ -56,14 +56,14 @@ const (
 	authResultSuccess = "success"
 	authResultFail    = "fail"
 
-	authReasonOK               = "ok"
-	authReasonMissingCreds     = "missing_credentials"
-	authReasonUserNotFound     = "user_not_found"
-	authReasonUserDisabled     = "user_disabled"
-	authReasonInvalidPassword  = "invalid_password"
-	authReasonClientNotBound   = "client_not_bound"
-	authReasonDBError          = "db_error"
-	authReasonDBErrorFailOpen  = "db_error_fail_open"
+	authReasonOK              = "ok"
+	authReasonMissingCreds    = "missing_credentials"
+	authReasonUserNotFound    = "user_not_found"
+	authReasonUserDisabled    = "user_disabled"
+	authReasonInvalidPassword = "invalid_password"
+	authReasonClientNotBound  = "client_not_bound"
+	authReasonDBError         = "db_error"
+	authReasonDBErrorFailOpen = "db_error_fail_open"
 )
 
 const (
@@ -422,7 +422,7 @@ func dbAuth(username, password, clientID string) (bool, string, error) {
 	var salt string
 	var enabledInt int16
 	err = p.QueryRow(ctx,
-		"SELECT password_hash, salt, enabled FROM iot_devices WHERE username=$1",
+		"SELECT password_hash, salt, enabled FROM mqtt_devices WHERE username=$1",
 		username).Scan(&hash, &salt, &enabledInt)
 
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -1,4 +1,4 @@
-module auth-plugin
+module mosquitto-plugin
 
 go 1.23.0
 
