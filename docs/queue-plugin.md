@@ -38,7 +38,7 @@ Mosquitto (MOSQ_EVT_MESSAGE)
 
 ```json
 {
-  "ts": "2025-01-23T17:00:00Z",
+  "queue_ts": "2025-01-23T17:00:00Z",
   "topic": "devices/alice/up",
   "payload_b64": "aGVsbG8=",
   "qos": 1,
@@ -53,7 +53,7 @@ Mosquitto (MOSQ_EVT_MESSAGE)
 
 说明：
 - `payload_b64`：base64 编码，保证二进制安全。
-- `ts`：UTC RFC3339。
+- `queue_ts`：UTC RFC3339。
 - 部分字段取决于 Mosquitto 事件结构体是否提供，无法获取时可省略。
 
 ### 3.2 可选字段（后续可扩展）

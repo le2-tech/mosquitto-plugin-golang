@@ -126,7 +126,7 @@ func TestParseFailMode(t *testing.T) {
 
 func TestQueueMessageJSONIncludesUserProps(t *testing.T) {
 	msg := queueMessage{
-		TS:         "2026-01-24T04:00:19Z",
+		QueueTS:    "2026-01-24T04:00:19Z",
 		Topic:      "test/123",
 		PayloadB64: "aGVsbG8=",
 		QoS:        1,

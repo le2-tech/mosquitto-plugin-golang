@@ -295,7 +295,7 @@ func message_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Pointe
 	}
 
 	msg := queueMessage{
-		TS:         time.Now().UTC().Format(time.RFC3339),
+		QueueTS:    time.Now().UTC().Format(time.RFC3339),
 		Topic:      topic,
 		PayloadB64: base64.StdEncoding.EncodeToString(payload),
 		QoS:        uint8(ed.qos),
