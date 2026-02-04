@@ -121,13 +121,6 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 				mosqLog(C.MOSQ_LOG_WARNING, "auth-plugin: invalid fail_open=%q, keeping existing value %t",
 					v, failOpen)
 			}
-		case "enforce_bind":
-			if parsed, ok := pluginutil.ParseBoolOption(v); ok {
-				enforceBind = parsed
-			} else {
-				mosqLog(C.MOSQ_LOG_WARNING, "auth-plugin: invalid enforce_bind=%q, keeping existing value %t",
-					v, enforceBind)
-			}
 		}
 	}
 	if pgDSN == "" {
@@ -135,8 +128,8 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 		return C.MOSQ_ERR_UNKNOWN
 	}
 
-	mosqLog(C.MOSQ_LOG_INFO, "auth-plugin: initializing pg_dsn=%s timeout_ms=%d fail_open=%t enforce_bind=%t",
-		pluginutil.SafeDSN(pgDSN), int(timeout/time.Millisecond), failOpen, enforceBind)
+	mosqLog(C.MOSQ_LOG_INFO, "auth-plugin: initializing pg_dsn=%s timeout_ms=%d fail_open=%t",
+		pluginutil.SafeDSN(pgDSN), int(timeout/time.Millisecond), failOpen)
 
 	// 验证 PG 配置；数据库暂不可用时不阻塞插件加载
 	if _, err := poolConfig(); err != nil {
@@ -199,9 +192,6 @@ func basic_auth_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Poi
 		mosqLog(C.MOSQ_LOG_WARNING, "auth-plugin auth event log failed: %v", err)
 	}
 	if allow {
-		if err := recordConnectEvent(info); err != nil {
-			mosqLog(C.MOSQ_LOG_WARNING, "auth-plugin connect event log failed: %v", err)
-		}
 		return C.MOSQ_ERR_SUCCESS
 	}
 	return C.MOSQ_ERR_AUTH

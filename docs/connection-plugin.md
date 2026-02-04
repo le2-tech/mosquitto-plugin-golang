@@ -1,6 +1,6 @@
 # 连接事件记录插件（PostgreSQL 设计说明）
 
-本文档描述连接事件记录方案：连接与断开事件由连接插件写入；若同时启用认证插件，登录成功时也会写入一次连接事件。
+本文档描述连接事件记录方案：连接与断开事件由连接插件写入。
 
 ## 1. 概述
 
@@ -13,7 +13,6 @@
 
 - `connect` 记录于客户端连接事件回调。
 - `disconnect` 记录于 `DISCONNECT` 阶段，表示连接结束。
-- 注意：若同时启用 `auth-plugin`，其登录成功时也会写入 `connect` 事件，可能产生重复记录。
 
 ## 3. 数据库表设计（固定表名）
 
@@ -65,13 +64,14 @@ CREATE INDEX IF NOT EXISTS client_sessions_ts_idx
 - 同步 `UPSERT` 到 `client_sessions`：
   - `last_event_*` 总是更新。
   - `connect` 时更新 `last_connect_ts`，并清空 `last_disconnect_ts`。
-  - `disconnect` 时更新 `last_disconnect_ts`，并保留 `last_connect_ts`。
-  - `reason_code` 仅断开事件有值（无则为 `NULL`）。
+- `disconnect` 时更新 `last_disconnect_ts`，并保留 `last_connect_ts`。
+- `reason_code` 仅断开事件有值（无则为 `NULL`）。
 - `extra` 当前未写入内容，保留用于后续扩展。
+- 未经过 `MOSQ_EVT_CONNECT` 的连接不会写入断开事件（用于过滤认证失败的断开）。
 
 写入来源：
 
-- `connect`：本插件写入；`auth-plugin` 在认证成功时也会写入（可能重复）。
+- `connect`：本插件写入。
 - `disconnect`：本插件写入。
 
 ## 5. 字段来源（建议映射）

@@ -60,6 +60,30 @@ func cstr(s *C.char) string {
 	return C.GoString(s)
 }
 
+func markConnected(client *C.struct_mosquitto) {
+	if client == nil {
+		return
+	}
+	key := uintptr(unsafe.Pointer(client))
+	activeConnMu.Lock()
+	activeConn[key] = struct{}{}
+	activeConnMu.Unlock()
+}
+
+func connectedAndClear(client *C.struct_mosquitto) bool {
+	if client == nil {
+		return false
+	}
+	key := uintptr(unsafe.Pointer(client))
+	activeConnMu.Lock()
+	_, ok := activeConn[key]
+	if ok {
+		delete(activeConn, key)
+	}
+	activeConnMu.Unlock()
+	return ok
+}
+
 // clientInfoFromDisconnect 提取断开事件信息与原因码。
 func clientInfoFromDisconnect(ed *C.struct_mosquitto_evt_disconnect) (clientInfo, int) {
 	info := clientInfo{}
@@ -181,6 +205,9 @@ func go_mosq_plugin_cleanup(userdata unsafe.Pointer, opts *C.struct_mosquitto_op
 		pool = nil
 	}
 	poolMu.Unlock()
+	activeConnMu.Lock()
+	activeConn = map[uintptr]struct{}{}
+	activeConnMu.Unlock()
 	mosqLog(C.MOSQ_LOG_INFO, "conn-plugin: plugin cleaned up")
 	return C.MOSQ_ERR_SUCCESS
 }
@@ -193,6 +220,7 @@ func connect_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Pointe
 		return C.MOSQ_ERR_SUCCESS
 	}
 
+	markConnected(ed.client)
 	info := clientInfoFromConnect(ed)
 	if err := recordConnectEvent(info); err != nil {
 		mosqLog(C.MOSQ_LOG_WARNING, "conn-plugin: record connect event failed: %v", err)
@@ -209,6 +237,10 @@ func disconnect_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Poi
 		return C.MOSQ_ERR_SUCCESS
 	}
 
+	if !connectedAndClear(ed.client) {
+		debugLog("conn-plugin: skip disconnect record (no prior connect) client_ptr=%p", ed.client)
+		return C.MOSQ_ERR_SUCCESS
+	}
 	info, reason := clientInfoFromDisconnect(ed)
 	if err := recordDisconnectEvent(info, reason); err != nil {
 		mosqLog(C.MOSQ_LOG_WARNING, "conn-plugin: record disconnect event failed: %v", err)

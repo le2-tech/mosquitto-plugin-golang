@@ -25,7 +25,7 @@ ON CONFLICT (client_id) DO UPDATE SET
   last_event_ts = EXCLUDED.last_event_ts,
   last_event_type = EXCLUDED.last_event_type,
   last_connect_ts = COALESCE(EXCLUDED.last_connect_ts, client_sessions.last_connect_ts),
-  last_disconnect_ts = COALESCE(EXCLUDED.last_disconnect_ts, client_sessions.last_disconnect_ts),
+  last_disconnect_ts = EXCLUDED.last_disconnect_ts,
   last_peer = EXCLUDED.last_peer,
   last_protocol = EXCLUDED.last_protocol,
   last_reason_code = EXCLUDED.last_reason_code,
@@ -52,4 +52,8 @@ var (
 	pgDSN        string
 	timeout      = 1000 * time.Millisecond
 	debugEnabled bool
+
+	// 已建立连接的连接句柄（用于过滤认证失败导致的断开事件）
+	activeConnMu sync.Mutex
+	activeConn   = map[uintptr]struct{}{}
 )

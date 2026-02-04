@@ -99,18 +99,6 @@ func dbAuth(username, password, clientID string) (bool, string, error) {
 		return false, authReasonInvalidPassword, nil
 	}
 
-	if enforceBind {
-		var ok int
-		err = p.QueryRow(ctx,
-			"SELECT 1 FROM client_bindings WHERE username=$1 AND client_id=$2",
-			username, clientID).Scan(&ok)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, authReasonClientNotBound, nil
-		}
-		if err != nil {
-			return false, authReasonDBError, err
-		}
-	}
 	return true, authReasonOK, nil
 }
 
@@ -128,30 +116,5 @@ func recordAuthEvent(info clientInfo, result, reason string) error {
 
 	_, err = p.Exec(ctx, insertAuthEventSQL, ts, result, reason,
 		pluginutil.OptionalString(info.clientID), pluginutil.OptionalString(info.username), pluginutil.OptionalString(info.peer), pluginutil.OptionalString(info.protocol))
-	return err
-}
-
-// recordConnectEvent 写入连接事件。
-func recordConnectEvent(info clientInfo) error {
-	ctx, cancel := ctxTimeout()
-	defer cancel()
-
-	p, err := ensurePool(ctx)
-	if err != nil {
-		return err
-	}
-
-	ts := time.Now().UTC()
-	eventType := connEventTypeConnect
-	userVal := pluginutil.OptionalString(info.username)
-	peerVal := pluginutil.OptionalString(info.peer)
-	protocolVal := pluginutil.OptionalString(info.protocol)
-	var reasonVal any
-	var extraVal any
-
-	connectTS := ts
-	var disconnectTS any
-	_, err = p.Exec(ctx, recordConnEventSQL, ts, eventType, info.clientID, userVal, peerVal, protocolVal, reasonVal, extraVal,
-		connectTS, disconnectTS)
 	return err
 }

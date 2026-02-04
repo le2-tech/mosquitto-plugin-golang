@@ -2,7 +2,7 @@
 
 本文档描述 `auth-plugin` 的当前实现，内容以源码为准（`authplugin/auth_plugin.c`、`authplugin/auth_cgo.go`、`authplugin/auth_db.go`、`authplugin/auth_types.go`、`authplugin/auth_logic.go`）。
 
-当前功能范围（实现层面）：仅处理 CONNECT 认证（BASIC_AUTH），ACL 未启用；认证数据来源 PostgreSQL，不经 HTTP；每次认证结果写入 `client_auth_events`，登录成功时写入连接事件表。
+当前功能范围（实现层面）：仅处理 CONNECT 认证（BASIC_AUTH），ACL 未启用；认证数据来源 PostgreSQL，不经 HTTP；每次认证结果写入 `client_auth_events`。
 
 ## 1. 组件与职责
 
@@ -44,7 +44,6 @@
      - `pg_dsn`
      - `timeout_ms`
      - `fail_open`
-     - `enforce_bind`
 2. 校验与日志：
    - `pg_dsn` 为空直接返回错误。
    - `pg_dsn` 写日志时遮盖密码（`xxxxx`）。
@@ -99,31 +98,12 @@
      - 计算 `sha256(password + salt)`
      - 与 `password_hash` 比对，不一致则拒绝（`invalid_password`）
 
-4. 如 `enforce_bind == true`，额外校验绑定：
-
-   ```sql
-   SELECT 1
-   FROM client_bindings
-   WHERE username = $1 AND client_id = $2
-   ```
-
-   - 无记录：拒绝（`client_not_bound`）
-
 ### 4.3 认证事件记录
 
 认证完成后（允许/拒绝/DB 错误）会写入 `client_auth_events`：
 
 - `result`：`success` / `fail`
-- `reason`：`ok` / `missing_credentials` / `user_not_found` / `user_disabled` / `invalid_password` / `client_not_bound` / `db_error` / `db_error_fail_open`
-
-### 4.4 连接事件写入
-
-登录成功后，会向连接事件表写入一条 `connect` 事件，并更新最近事件表：
-
-- `client_conn_events`：追加 `event_type = 'connect'`
-- `client_sessions`：更新 `last_event_*` 与 `last_connect_ts`，并清空 `last_disconnect_ts`
-
-表结构见 `docs/connection-plugin.md`。
+- `reason`：`ok` / `missing_credentials` / `user_not_found` / `user_disabled` / `invalid_password` / `db_error` / `db_error_fail_open`
 
 ### 4.4 错误处理（`fail_open`）
 
@@ -151,14 +131,7 @@
 - `salt`（文本）
 - `enabled`（会被扫描为 `int16`，需支持 0/1）
 
-### 6.2 client_bindings（可选绑定表）
-
-- `username`（存放 user_name）
-- `client_id`
-
-当 `enforce_bind=true` 时，要求存在对应 `(username, client_id)` 记录。
-
-### 6.3 client_auth_events（认证事件表）
+### 6.2 client_auth_events（认证事件表）
 
 记录每次认证结果（success/fail）与原因：
 
@@ -181,27 +154,19 @@ CREATE INDEX IF NOT EXISTS client_auth_events_ts_idx
   ON client_auth_events (ts DESC);
 ```
 
-### 6.4 client_conn_events / client_sessions
-
-登录成功会写入连接事件表，因此需要确保以下两张表存在（表结构见 `docs/connection-plugin.md`）：
-
-- `client_conn_events`
-- `client_sessions`
-
 ## 7. 关键配置项（运行时）
 
 - `PG_DSN`（环境变量）：默认 DSN 来源。
 - `plugin_opt_pg_dsn`：覆盖 `PG_DSN`。
 - `plugin_opt_timeout_ms`：数据库访问超时（默认 1500）。
 - `plugin_opt_fail_open`：数据库异常时放行（默认 false）。
-- `plugin_opt_enforce_bind`：启用 client_id 绑定校验（默认 false）。
 
 ## 8. 与初始化脚本/历史文档的差异（需要注意）
 
 当前实现与脚本/历史说明存在明显偏差，后续扩展前需要统一：
 
 - 历史说明宣称支持 **ACL**，但当前代码未注册 ACL 回调。
-- `scripts/init_db.sql` 使用表 `users` / `acls` / `client_bindings`，
+- `scripts/init_db.sql` 使用表 `users` / `acls`，
   但当前代码实际查询 **`mqtt_accounts`**（字段 `user_name`）。
 - 历史说明/脚本描述 **bcrypt**，但 `cmd/bcryptgen` 与插件逻辑使用 **sha256(password + salt)**。
 
@@ -218,11 +183,6 @@ CREATE TABLE IF NOT EXISTS mqtt_accounts (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS client_bindings (
-  username  TEXT NOT NULL,
-  client_id TEXT NOT NULL,
-  PRIMARY KEY (username, client_id)
-);
 ```
 
 脚本会输出 DSN，可用于 `plugin_opt_pg_dsn`。
@@ -262,7 +222,6 @@ plugin /absolute/path/to/plugins/auth-plugin
 plugin_opt_pg_dsn postgres://user:pass@127.0.0.1:5432/mqtt?sslmode=disable
 plugin_opt_timeout_ms 1500
 plugin_opt_fail_open false
-plugin_opt_enforce_bind false
 ```
 
 启动：
@@ -289,7 +248,7 @@ plugin /mosquitto/plugins/auth-plugin
 ## 11. 安全与运维建议
 
 - 生产环境建议为 Postgres 启用 TLS（`sslmode=verify-full`）并配置 CA。
-- DB 角色授予 `SELECT`（`mqtt_accounts`、`client_bindings`）以及 `INSERT`（`client_auth_events`、`client_conn_events`、`client_sessions`）。
+- DB 角色授予 `SELECT`（`mqtt_accounts`）以及 `INSERT`（`client_auth_events`）。
 - 仅使用本文档中的 `plugin_opt_*` 配置项；没有额外的 Mosquitto 私有选项。
 - 生产建议 `fail_open=false`，避免 DB 故障导致放行。
 
