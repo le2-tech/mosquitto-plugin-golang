@@ -47,11 +47,12 @@ Mosquitto (MOSQ_EVT_MESSAGE)
   "username": "alice",
   "peer": "192.168.1.10:52344",
   "protocol": "MQTT/3.1.1",
-  "user_properties": [{"k": "rr", "v": "bbb"}]
+  "user_properties": [{ "k": "rr", "v": "bbb" }]
 }
 ```
 
 说明：
+
 - `payload_b64`：base64 编码，保证二进制安全。
 - `queue_ts`：UTC RFC3339。
 - 部分字段取决于 Mosquitto 事件结构体是否提供，无法获取时可省略。
@@ -72,6 +73,7 @@ Mosquitto (MOSQ_EVT_MESSAGE)
 - `include_retained=false`（默认不推送 retain）。
 
 可配置项：
+
 - `include_topics` / `exclude_topics`：MQTT 通配符 `+`/`#`。
 - `include_users` / `exclude_users`：用户名过滤。
 - `include_clients` / `exclude_clients`：client_id 过滤。
@@ -87,6 +89,7 @@ Mosquitto (MOSQ_EVT_MESSAGE)
 ## 6. 配置项
 
 连接与路由：
+
 - `plugin_opt_queue_backend`：固定 `rabbitmq`。
 - `plugin_opt_queue_dsn`：AMQP 连接串（可由环境变量 `QUEUE_DSN` 提供默认值，`plugin_opt_*` 优先）。
 - `plugin_opt_queue_exchange`：Exchange 名称。
@@ -95,12 +98,14 @@ Mosquitto (MOSQ_EVT_MESSAGE)
 - `plugin_opt_queue_queue`：Queue 名称（可选，仅用于与运维约定，不参与绑定）。
 
 发送与失败策略：
+
 - `plugin_opt_queue_timeout_ms`：发送超时（默认 1000）。
 - `plugin_opt_queue_fail_mode`：`drop`/`block`/`disconnect`（默认 `drop`）。
 - `plugin_opt_payload_encoding`：固定 `base64`。
 - `plugin_opt_queue_debug`：调试日志开关（默认 false，需配合 Mosquitto `log_type debug`）。
 
 过滤：
+
 - `plugin_opt_include_topics`：多个 topic 逗号分隔（默认空）。
 - `plugin_opt_exclude_topics`：多个 topic 逗号分隔（默认 `$SYS/#`；显式配置则覆盖默认）。
 - `plugin_opt_include_users`：多个用户名逗号分隔（默认空）。
@@ -114,11 +119,6 @@ Mosquitto (MOSQ_EVT_MESSAGE)
 ## 7. 运行配置示例
 
 ```conf
-# 认证插件
-plugin /absolute/path/to/plugins/auth-plugin
-plugin_opt_pg_dsn postgres://user:pass@127.0.0.1:5432/mqtt?sslmode=disable
-plugin_opt_timeout_ms 1500
-plugin_opt_fail_open false
 
 # 消息队列插件
 plugin /absolute/path/to/plugins/queue-plugin

@@ -85,7 +85,6 @@ CREATE INDEX IF NOT EXISTS client_sessions_ts_idx
 ## 6. 配置项
 
 - `plugin_opt_conn_pg_dsn`：PostgreSQL DSN（最高优先级，必填）。
-- `CONN_PG_DSN`：环境变量 DSN（次优先级）。
 - `PG_DSN`：环境变量 DSN（兜底）。
 - `plugin_opt_conn_timeout_ms`：写库超时（默认 1000）。
 - `plugin_opt_conn_debug`：调试日志（默认 false）。
@@ -101,8 +100,6 @@ plugin_opt_conn_pg_dsn postgres://user:pass@127.0.0.1:5432/mqtt?sslmode=disable
 plugin_opt_conn_timeout_ms 1000
 plugin_opt_conn_debug false
 
-# 认证插件（示例）
-# plugin /absolute/path/to/plugins/auth-plugin
 ```
 
 ## 8. 可靠性与日志

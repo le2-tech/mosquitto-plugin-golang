@@ -138,9 +138,6 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 	if env := os.Getenv("PG_DSN"); env != "" {
 		pgDSN = env
 	}
-	if env := os.Getenv("CONN_PG_DSN"); env != "" {
-		pgDSN = env
-	}
 
 	for _, o := range unsafe.Slice(opts, int(optCount)) {
 		k, v := cstr(o.key), cstr(o.value)
