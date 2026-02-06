@@ -3,7 +3,7 @@ BINARY_DIR := plugins
 DOCKER_IMAGE := ghcr.io/le2-tech/mosquitto
 
 GOFLAGS :=
-CGO_ENABLED := 1
+CGO_ENABLED ?= 1
 
 .PHONY: all build-auth build-queue bcryptgen clean docker-build docker-run mod
 

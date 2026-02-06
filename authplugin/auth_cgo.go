@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"runtime/debug"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -42,9 +43,17 @@ func mosqLog(level C.int, msg string, args ...any) {
 	C.go_mosq_log(level, cs)
 }
 
-// infoLog 以 info 级别输出日志。
-func infoLog(msg string, args ...any) {
-	mosqLog(C.MOSQ_LOG_INFO, msg, args...)
+const mosqLogInfo = int(C.MOSQ_LOG_INFO)
+
+// logKV 以 key=value 形式输出结构化字段。
+func logKV(level int, msg string, kv ...any) {
+	var b strings.Builder
+	b.WriteString(msg)
+	for i := 0; i+1 < len(kv); i += 2 {
+		b.WriteString(" ")
+		b.WriteString(fmt.Sprintf("%v=%v", kv[i], kv[i+1]))
+	}
+	mosqLog(C.int(level), b.String())
 }
 
 func cstr(s *C.char) string {
@@ -89,7 +98,10 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 
 	defer func() {
 		if r := recover(); r != nil {
-			mosqLog(C.MOSQ_LOG_ERR, "auth-plugin: panic in plugin_init: %v\n%s", r, string(debug.Stack()))
+			logKV(int(C.MOSQ_LOG_ERR), "auth-plugin: panic in plugin_init",
+				"panic", r,
+				"stack", string(debug.Stack()),
+			)
 			rc = C.MOSQ_ERR_UNKNOWN
 		}
 	}()
@@ -111,35 +123,47 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 			if dur, ok := pluginutil.ParseTimeoutMS(v); ok {
 				timeout = dur
 			} else {
-				mosqLog(C.MOSQ_LOG_WARNING, "auth-plugin: invalid timeout_ms=%q, keeping existing value %dms",
-					v, int(timeout/time.Millisecond))
+				logKV(C.MOSQ_LOG_WARNING, "auth-plugin: invalid timeout_ms",
+					"value", v,
+					"timeout_ms", int(timeout/time.Millisecond),
+				)
 			}
 		case "fail_open":
 			if parsed, ok := pluginutil.ParseBoolOption(v); ok {
 				failOpen = parsed
 			} else {
-				mosqLog(C.MOSQ_LOG_WARNING, "auth-plugin: invalid fail_open=%q, keeping existing value %t",
-					v, failOpen)
+				logKV(C.MOSQ_LOG_WARNING, "auth-plugin: invalid fail_open",
+					"value", v,
+					"fail_open", failOpen,
+				)
 			}
 		}
 	}
 	if pgDSN == "" {
-		mosqLog(C.MOSQ_LOG_ERR, "auth-plugin: pg_dsn must be set")
+		logKV(int(C.MOSQ_LOG_ERR), "auth-plugin: pg_dsn must be set")
 		return C.MOSQ_ERR_UNKNOWN
 	}
 
-	mosqLog(C.MOSQ_LOG_INFO, "auth-plugin: initializing pg_dsn=%s timeout_ms=%d fail_open=%t",
-		pluginutil.SafeDSN(pgDSN), int(timeout/time.Millisecond), failOpen)
+	logKV(mosqLogInfo, "auth-plugin: initializing",
+		"pg_dsn", pluginutil.SafeDSN(pgDSN),
+		"timeout_ms", int(timeout/time.Millisecond),
+		"fail_open", failOpen,
+	)
 
 	// 验证 PG 配置；数据库暂不可用时不阻塞插件加载
 	if _, err := poolConfig(); err != nil {
-		mosqLog(C.MOSQ_LOG_ERR, "auth-plugin: invalid pg_dsn (%s): %v", pluginutil.SafeDSN(pgDSN), err)
+		logKV(int(C.MOSQ_LOG_ERR), "auth-plugin: invalid pg_dsn",
+			"pg_dsn", pluginutil.SafeDSN(pgDSN),
+			"error", err.Error(),
+		)
 		return C.MOSQ_ERR_UNKNOWN
 	}
 	ctx, cancel := ctxTimeout()
 	defer cancel()
 	if _, err := ensurePool(ctx); err != nil {
-		mosqLog(C.MOSQ_LOG_WARNING, "auth-plugin: initial pg connection failed: %v (will retry lazily)", err)
+		logKV(int(C.MOSQ_LOG_WARNING), "auth-plugin: initial pg connection failed",
+			"error", err.Error(),
+		)
 	}
 
 	// 注册回调
@@ -147,7 +171,7 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 		return rc
 	}
 
-	mosqLog(C.MOSQ_LOG_INFO, "auth-plugin: plugin initialized")
+	logKV(mosqLogInfo, "auth-plugin: plugin initialized")
 	return C.MOSQ_ERR_SUCCESS
 }
 
@@ -161,7 +185,7 @@ func go_mosq_plugin_cleanup(userdata unsafe.Pointer, opts *C.struct_mosquitto_op
 		pool = nil
 	}
 	poolMu.Unlock()
-	mosqLog(C.MOSQ_LOG_INFO, "auth-plugin: plugin cleaned up")
+	logKV(mosqLogInfo, "auth-plugin: plugin cleaned up")
 	return C.MOSQ_ERR_SUCCESS
 }
 
@@ -176,9 +200,9 @@ func basic_auth_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Poi
 	result := authResultFail
 	finalReason := reason
 	if err != nil {
-		mosqLog(C.MOSQ_LOG_WARNING, "auth-plugin auth error: "+err.Error())
+		logKV(int(C.MOSQ_LOG_WARNING), "auth-plugin auth error", "error", err.Error())
 		if failOpen {
-			mosqLog(C.MOSQ_LOG_INFO, "auth-plugin: fail_open=true, allowing auth despite error")
+			logKV(mosqLogInfo, "auth-plugin: fail_open allow auth", "reason", "db_error")
 			allow = true
 			result = authResultSuccess
 			finalReason = authReasonDBErrorFailOpen
@@ -189,7 +213,7 @@ func basic_auth_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Poi
 		result = authResultSuccess
 	}
 	if err := recordAuthEvent(info, result, finalReason); err != nil {
-		mosqLog(C.MOSQ_LOG_WARNING, "auth-plugin auth event log failed: %v", err)
+		logKV(int(C.MOSQ_LOG_WARNING), "auth-plugin auth event log failed", "error", err.Error())
 	}
 	if allow {
 		return C.MOSQ_ERR_SUCCESS
@@ -203,6 +227,4 @@ func acl_check_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Poin
 	return C.MOSQ_ERR_PLUGIN_DEFER
 }
 
-func main() {
-	println("hit! pid:", os.Getpid())
-}
+func main() {}

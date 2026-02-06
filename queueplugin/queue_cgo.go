@@ -44,9 +44,17 @@ func mosqLog(level C.int, msg string, args ...any) {
 	C.go_mosq_log(level, cs)
 }
 
-// infoLog 以 info 级别输出日志。
-func infoLog(msg string, args ...any) {
-	mosqLog(C.MOSQ_LOG_INFO, msg, args...)
+const mosqLogInfo = int(C.MOSQ_LOG_INFO)
+
+// logKV 以 key=value 形式输出结构化字段。
+func logKV(level int, msg string, kv ...any) {
+	var b strings.Builder
+	b.WriteString(msg)
+	for i := 0; i+1 < len(kv); i += 2 {
+		b.WriteString(" ")
+		b.WriteString(fmt.Sprintf("%v=%v", kv[i], kv[i+1]))
+	}
+	mosqLog(C.int(level), b.String())
 }
 
 // debugLog 在 queue_debug=true 时才输出。
@@ -70,7 +78,7 @@ func extractUserProperties(props *C.mosquitto_property) []userProperty {
 		return nil
 	}
 
-	var out []userProperty
+	out := make([]userProperty, 0, 4)
 	var name *C.char
 	var value *C.char
 
@@ -162,6 +170,7 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 		case "queue_routing_key":
 			cfg.routingKey = v
 		case "queue_queue":
+			// 仅用于与运维约定，不参与绑定/声明。
 			cfg.queueName = v
 		case "queue_timeout_ms":
 			if dur, ok := pluginutil.ParseTimeoutMS(v); ok {
@@ -224,9 +233,15 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 		return C.MOSQ_ERR_INVAL
 	}
 
-	mosqLog(C.MOSQ_LOG_INFO,
-		"queue-plugin: init backend=%s dsn=%s exchange=%s exchange_type=%s routing_key=%s queue=%s timeout_ms=%d fail_mode=%s",
-		cfg.backend, pluginutil.SafeDSN(cfg.dsn), cfg.exchange, cfg.exchangeType, cfg.routingKey, cfg.queueName, int(cfg.timeout/time.Millisecond), failModeString(cfg.failMode),
+	logKV(mosqLogInfo, "queue-plugin: init",
+		"backend", cfg.backend,
+		"dsn", pluginutil.SafeDSN(cfg.dsn),
+		"exchange", cfg.exchange,
+		"exchange_type", cfg.exchangeType,
+		"routing_key", cfg.routingKey,
+		"queue", cfg.queueName,
+		"timeout_ms", int(cfg.timeout/time.Millisecond),
+		"fail_mode", failModeString(cfg.failMode),
 	)
 
 	publisher.mu.Lock()
@@ -307,8 +322,15 @@ func message_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Pointe
 	}
 	msg.UserProperties = extractUserProperties(ed.properties)
 
-	debugLog("queue-plugin: publish topic=%q qos=%d retain=%t len=%d client_id=%q username=%q user_props=%d",
-		topic, ed.qos, bool(ed.retain), payloadLen, clientID, username, len(msg.UserProperties))
+	logKV(int(C.MOSQ_LOG_DEBUG), "queue-plugin: publish",
+		"topic", topic,
+		"qos", ed.qos,
+		"retain", bool(ed.retain),
+		"len", payloadLen,
+		"client_id", clientID,
+		"username", username,
+		"user_props", len(msg.UserProperties),
+	)
 
 	body, err := json.Marshal(msg)
 	if err != nil {

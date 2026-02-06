@@ -54,7 +54,7 @@ func ensurePool(ctx context.Context) (*pgxpool.Pool, error) {
 		return nil, err
 	}
 	pool = newPool
-	infoLog("auth-plugin: connected to PostgreSQL successfully")
+	logKV(mosqLogInfo, "auth-plugin: connected to PostgreSQL successfully")
 	return pool, nil
 }
 
@@ -83,8 +83,8 @@ func dbAuth(username, password, clientID string) (bool, string, error) {
 	var salt string
 	var enabledInt int16
 	err = p.QueryRow(ctx,
-		"SELECT password_hash, salt, enabled FROM mqtt_accounts WHERE user_name=$1",
-		username).Scan(&hash, &salt, &enabledInt)
+		"SELECT password_hash, salt, enabled FROM mqtt_accounts WHERE user_name=$1 and (clientid=$2 or clientid is null)",
+		username, clientID).Scan(&hash, &salt, &enabledInt)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, authReasonUserNotFound, nil

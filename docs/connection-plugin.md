@@ -64,7 +64,7 @@ CREATE INDEX IF NOT EXISTS client_sessions_ts_idx
 - 同步 `UPSERT` 到 `client_sessions`：
   - `last_event_*` 总是更新。
   - `connect` 时更新 `last_connect_ts`，并清空 `last_disconnect_ts`。
-- `disconnect` 时更新 `last_disconnect_ts`，并保留 `last_connect_ts`。
+  - `disconnect` 时更新 `last_disconnect_ts`，并保留 `last_connect_ts`。
 - `reason_code` 仅断开事件有值（无则为 `NULL`）。
 - `extra` 当前未写入内容，保留用于后续扩展。
 - 未经过 `MOSQ_EVT_CONNECT` 的连接不会写入断开事件（用于过滤认证失败的断开）。

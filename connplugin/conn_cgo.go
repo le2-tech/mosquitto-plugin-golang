@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"runtime/debug"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -40,17 +41,17 @@ func mosqLog(level C.int, msg string, args ...any) {
 	C.go_mosq_log(level, cs)
 }
 
-// infoLog 以 info 级别输出日志。
-func infoLog(msg string, args ...any) {
-	mosqLog(C.MOSQ_LOG_INFO, msg, args...)
-}
+const mosqLogInfo = int(C.MOSQ_LOG_INFO)
 
-// debugLog 在 conn_debug=true 时才输出。
-func debugLog(msg string, args ...any) {
-	if !debugEnabled {
-		return
+// logKV 以 key=value 形式输出结构化字段。
+func logKV(level int, msg string, kv ...any) {
+	var b strings.Builder
+	b.WriteString(msg)
+	for i := 0; i+1 < len(kv); i += 2 {
+		b.WriteString(" ")
+		b.WriteString(fmt.Sprintf("%v=%v", kv[i], kv[i+1]))
 	}
-	mosqLog(C.MOSQ_LOG_DEBUG, msg, args...)
+	mosqLog(C.int(level), b.String())
 }
 
 func cstr(s *C.char) string {
@@ -70,18 +71,25 @@ func markConnected(client *C.struct_mosquitto) {
 	activeConnMu.Unlock()
 }
 
-func connectedAndClear(client *C.struct_mosquitto) bool {
+func connected(client *C.struct_mosquitto) bool {
 	if client == nil {
 		return false
 	}
 	key := uintptr(unsafe.Pointer(client))
 	activeConnMu.Lock()
 	_, ok := activeConn[key]
-	if ok {
-		delete(activeConn, key)
-	}
 	activeConnMu.Unlock()
 	return ok
+}
+
+func clearConnected(client *C.struct_mosquitto) {
+	if client == nil {
+		return
+	}
+	key := uintptr(unsafe.Pointer(client))
+	activeConnMu.Lock()
+	delete(activeConn, key)
+	activeConnMu.Unlock()
 }
 
 // clientInfoFromDisconnect 提取断开事件信息与原因码。
@@ -166,8 +174,11 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 		return C.MOSQ_ERR_UNKNOWN
 	}
 
-	mosqLog(C.MOSQ_LOG_INFO, "conn-plugin: initializing pg_dsn=%s timeout_ms=%d debug=%t",
-		pluginutil.SafeDSN(pgDSN), int(timeout/time.Millisecond), debugEnabled)
+	logKV(mosqLogInfo, "conn-plugin: initializing",
+		"pg_dsn", pluginutil.SafeDSN(pgDSN),
+		"timeout_ms", int(timeout/time.Millisecond),
+		"debug", debugEnabled,
+	)
 
 	if _, err := poolConfig(); err != nil {
 		mosqLog(C.MOSQ_LOG_ERR, "conn-plugin: invalid pg_dsn (%s): %v", pluginutil.SafeDSN(pgDSN), err)
@@ -234,14 +245,18 @@ func disconnect_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Poi
 		return C.MOSQ_ERR_SUCCESS
 	}
 
-	if !connectedAndClear(ed.client) {
-		debugLog("conn-plugin: skip disconnect record (no prior connect) client_ptr=%p", ed.client)
+	if !connected(ed.client) {
+		if debugEnabled {
+			logKV(7, "conn-plugin: skip disconnect record", "client_ptr", fmt.Sprintf("%p", ed.client))
+		}
 		return C.MOSQ_ERR_SUCCESS
 	}
 	info, reason := clientInfoFromDisconnect(ed)
 	if err := recordDisconnectEvent(info, reason); err != nil {
 		mosqLog(C.MOSQ_LOG_WARNING, "conn-plugin: record disconnect event failed: %v", err)
+		return C.MOSQ_ERR_SUCCESS
 	}
+	clearConnected(ed.client)
 
 	return C.MOSQ_ERR_SUCCESS
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -13,6 +14,8 @@ type amqpPublisher struct {
 	mu   sync.Mutex
 	conn *amqp.Connection
 	ch   *amqp.Channel
+
+	nextDial time.Time
 }
 
 func (p *amqpPublisher) closeLocked() {
@@ -35,15 +38,20 @@ func (p *amqpPublisher) ensureLocked() error {
 		p.ch = nil
 	}
 	if p.conn == nil {
+		if !p.nextDial.IsZero() && time.Now().Before(p.nextDial) {
+			return errors.New("queue-plugin: reconnect backoff")
+		}
 		conn, err := amqp.DialConfig(cfg.dsn, amqp.Config{
 			Dial: amqp.DefaultDial(cfg.timeout),
 		})
 		if err != nil {
+			p.nextDial = time.Now().Add(1 * time.Second)
 			return err
 		}
+		p.nextDial = time.Time{}
 		p.conn = conn
 		if cfg.debug {
-			infoLog("queue-plugin: connected to rabbitmq")
+			logKV(mosqLogInfo, "queue-plugin: connected to rabbitmq")
 		}
 	}
 	if p.ch == nil {

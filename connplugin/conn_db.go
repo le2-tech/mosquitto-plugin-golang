@@ -52,7 +52,7 @@ func ensurePool(ctx context.Context) (*pgxpool.Pool, error) {
 		return nil, err
 	}
 	pool = newPool
-	infoLog("conn-plugin: connected to PostgreSQL successfully")
+	logKV(mosqLogInfo, "conn-plugin: connected to PostgreSQL successfully")
 	return pool, nil
 }
 
@@ -90,8 +90,15 @@ func recordDisconnectEvent(info clientInfo, reason int) error {
 		return err
 	}
 
-	debugLog("conn-plugin: recorded event=%s client_id=%q username=%q peer=%q protocol=%q",
-		connEventTypeDisconnect, info.clientID, info.username, info.peer, info.protocol)
+	if debugEnabled {
+		logKV(7, "conn-plugin: recorded event",
+			"event", connEventTypeDisconnect,
+			"client_id", info.clientID,
+			"username", info.username,
+			"peer", info.peer,
+			"protocol", info.protocol,
+		)
+	}
 	return nil
 }
 
@@ -121,7 +128,14 @@ func recordConnectEvent(info clientInfo) error {
 		return err
 	}
 
-	debugLog("conn-plugin: recorded event=%s client_id=%q username=%q peer=%q protocol=%q",
-		connEventTypeConnect, info.clientID, info.username, info.peer, info.protocol)
+	if debugEnabled {
+		logKV(7, "conn-plugin: recorded event",
+			"event", connEventTypeConnect,
+			"client_id", info.clientID,
+			"username", info.username,
+			"peer", info.peer,
+			"protocol", info.protocol,
+		)
+	}
 	return nil
 }
