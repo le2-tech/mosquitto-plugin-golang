@@ -7,7 +7,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// recordEventSQL 同时写入事件表并更新会话表。
 const recordEventSQL = `
 WITH ins AS (
   INSERT INTO client_conn_events
@@ -37,23 +36,12 @@ const (
 	connEventTypeDisconnect = "disconnect"
 )
 
-// clientInfo 保存连接/断开事件中关键信息。
-type clientInfo struct {
-	clientID string
-	username string
-	peer     string
-	protocol string
-}
-
 var (
-	// 连接池与配置
-	pool         *pgxpool.Pool
-	poolMu       sync.RWMutex
-	pgDSN        string
-	timeout      = 1000 * time.Millisecond
-	debugEnabled bool
+	pool    *pgxpool.Pool
+	poolMu  sync.RWMutex
+	pgDSN   string
+	timeout = 1000 * time.Millisecond
 
-	// 已建立连接的连接句柄（用于过滤认证失败导致的断开事件）
 	activeConnMu sync.Mutex
 	activeConn   = map[uintptr]struct{}{}
 )

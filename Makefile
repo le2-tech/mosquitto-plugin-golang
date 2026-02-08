@@ -17,16 +17,16 @@ mkdir:
 	mkdir -p $(BINARY_DIR)
 
 build-auth-dev:
-	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -gcflags "all=-N -l" -ldflags "" -o $(BINARY_DIR)/auth-plugin ./authplugin
+	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -gcflags "all=-N -l" -ldflags "" -o $(BINARY_DIR)/auth-plugin ./plugin/authplugin
 
 build-auth:
-	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o $(BINARY_DIR)/auth-plugin ./authplugin
+	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o $(BINARY_DIR)/auth-plugin ./plugin/authplugin
 
 build-queue:
-	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o $(BINARY_DIR)/queue-plugin ./queueplugin
+	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o $(BINARY_DIR)/queue-plugin ./plugin/queueplugin
 
 build-conn:
-	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o $(BINARY_DIR)/conn-plugin ./connplugin
+	CGO_ENABLED=$(CGO_ENABLED) go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o $(BINARY_DIR)/conn-plugin ./plugin/connplugin
 
 run-bcryptgen:
 	go run ./cmd/bcryptgen --salt slat_foo123 --password public

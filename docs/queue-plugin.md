@@ -2,14 +2,18 @@
 
 本文档描述新增的 Mosquitto 插件：把 Broker 收到的消息推送到 RabbitMQ，用作实现依据。
 
+说明：
+- 本文仅覆盖 `queueplugin`（RabbitMQ）实现。
+- 独立 PostgreSQL 插件方案见 `docs/msgstore-plugin-design.md`（提案）。
+
 ## 1. 决策摘要
 
 - 后端：RabbitMQ（AMQP 0-9-1）。
 - Exchange：`direct`，Routing key 由配置项指定。
 - Queue：由运维预创建并绑定，插件不声明/不绑定。
-- 消息格式：固定为 JSON + base64（payload 置于 `payload_b64`）。
+- 消息格式：固定为 JSON（文本 payload 置于 `payload`）。
 - MQTT v5 properties：仅携带 `user_properties`。
-- 过滤策略：支持 include/exclude；默认排除 `$SYS/#`；`exclude_*` 高于 `include_*`；默认不推送 retain。
+- 过滤策略：仅内置过滤 `$SYS/#` 主题。
 - 发送策略：回调内直接发送，短超时，失败默认丢弃（`fail_mode=drop`）。
 
 ## 2. 触发点与处理流程
@@ -34,13 +38,13 @@ Mosquitto (MOSQ_EVT_MESSAGE)
 
 ## 3. 消息格式
 
-### 3.1 固定 JSON + base64
+### 3.1 固定 JSON（文本 payload）
 
 ```json
 {
   "ts": "2025-01-23T17:00:00Z",
   "topic": "devices/alice/up",
-  "payload_b64": "aGVsbG8=",
+  "payload": "hello",
   "qos": 1,
   "retain": false,
   "client_id": "client-1",
@@ -53,7 +57,7 @@ Mosquitto (MOSQ_EVT_MESSAGE)
 
 说明：
 
-- `payload_b64`：base64 编码，保证二进制安全。
+- `payload`：文本内容（UTF-8）。
 - `ts`：UTC RFC3339。
 - 部分字段取决于 Mosquitto 事件结构体是否提供，无法获取时可省略。
 
@@ -67,17 +71,8 @@ Mosquitto (MOSQ_EVT_MESSAGE)
 
 默认策略：
 
-- 默认排除 `$SYS/#`（内部系统主题）。
-- 未配置 include 条件时，允许所有 topic/user/client（排除项除外）。
-- `exclude_*` 优先级高于 `include_*`。
-- `include_retained=false`（默认不推送 retain）。
-
-可配置项：
-
-- `include_topics` / `exclude_topics`：MQTT 通配符 `+`/`#`。
-- `include_users` / `exclude_users`：用户名过滤。
-- `include_clients` / `exclude_clients`：client_id 过滤。
-- `include_retained`：是否推送 retain。
+- 内置排除 `$SYS/#`（内部系统主题）。
+- 其余主题默认放行，不提供额外过滤配置项。
 
 ## 5. RabbitMQ 对接规则
 
@@ -101,18 +96,7 @@ Mosquitto (MOSQ_EVT_MESSAGE)
 
 - `plugin_opt_queue_timeout_ms`：发送超时（默认 1000）。
 - `plugin_opt_queue_fail_mode`：`drop`/`block`/`disconnect`（默认 `drop`）。
-- `plugin_opt_payload_encoding`：固定 `base64`。
-- `plugin_opt_queue_debug`：调试日志开关（默认 false，需配合 Mosquitto `log_type debug`）。
-
-过滤：
-
-- `plugin_opt_include_topics`：多个 topic 逗号分隔（默认空）。
-- `plugin_opt_exclude_topics`：多个 topic 逗号分隔（默认 `$SYS/#`；显式配置则覆盖默认）。
-- `plugin_opt_include_users`：多个用户名逗号分隔（默认空）。
-- `plugin_opt_exclude_users`：多个用户名逗号分隔（默认空）。
-- `plugin_opt_include_clients`：多个 client_id 逗号分隔（默认空）。
-- `plugin_opt_exclude_clients`：多个 client_id 逗号分隔（默认空）。
-- `plugin_opt_include_retained`：是否推送 retain（默认 false）。
+- 调试日志由 Mosquitto `log_type` 控制（例如启用 `log_type debug`）。
 
 **注意：** DSN 等敏感信息需在日志中脱敏。
 
@@ -129,7 +113,6 @@ plugin_opt_queue_exchange_type direct
 plugin_opt_queue_routing_key mqtt.messages
 plugin_opt_queue_queue mqtt_queue
 plugin_opt_queue_fail_mode drop
-plugin_opt_payload_encoding base64
 ```
 
 > 说明：每个 `plugin` 与其 `plugin_opt_*` 需要连在一起配置。
@@ -145,13 +128,12 @@ plugin_opt_payload_encoding base64
 - DSN/密码日志脱敏。
 - 支持 TLS 连接（由后端配置决定）。
 - 不记录明文 payload（除非显式开启 debug）。
-- 可通过过滤规则限制敏感数据流出。
 
 ## 10. 文件结构（当前实现）
 
 ```
 .
-├── queueplugin/
+├── plugin/queueplugin/
 │   ├── queue_bridge.c        # C 侧入口与包装函数
 │   ├── queue_cgo.go          # Go 导出函数/回调与 C 交互
 │   ├── queue_config.go       # 配置解析

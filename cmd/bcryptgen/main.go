@@ -1,10 +1,11 @@
 package main
 
 import (
-	"crypto/sha256"
 	"flag"
 	"fmt"
 	"os"
+
+	"mosquitto-plugin/internal/pluginutil"
 )
 
 var (
@@ -20,5 +21,5 @@ func main() {
 		os.Exit(2)
 	}
 
-	fmt.Printf("%x\n", sha256.Sum256([]byte(*password+*salt)))
+	fmt.Println(pluginutil.SHA256PwdSalt(*password, *salt))
 }

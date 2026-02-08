@@ -37,14 +37,6 @@ INSERT INTO client_auth_events
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 `
 
-// clientInfo 保存认证/连接事件中的关键信息。
-type clientInfo struct {
-	clientID string
-	username string
-	peer     string
-	protocol string
-}
-
 var (
 	pool   *pgxpool.Pool
 	poolMu sync.RWMutex

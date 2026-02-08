@@ -6,6 +6,7 @@
 
 - 认证插件（PostgreSQL）：`docs/auth-plugin.md`
 - 消息队列插件（RabbitMQ）：`docs/queue-plugin.md`
+- 独立 msgstore-plugin（PostgreSQL）设计（提案，暂不实现）：`docs/msgstore-plugin-design.md`
 - 连接事件记录插件（PostgreSQL）：`docs/connection-plugin.md`
 
 ## 2. 构建与产物
@@ -25,9 +26,10 @@
 
 ```
 .
-├── authplugin/            # 认证插件
-├── connplugin/            # 连接事件插件
-├── queueplugin/           # 消息队列插件
+├── plugin/
+│   ├── authplugin/        # 认证插件
+│   ├── connplugin/        # 连接事件插件
+│   └── queueplugin/       # 消息队列插件
 ├── cmd/bcryptgen/          # 密码 hash 工具
 ├── internal/pluginutil/    # 通用工具函数
 ├── docs/                  # 文档

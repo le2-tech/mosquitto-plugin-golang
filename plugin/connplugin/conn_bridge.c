@@ -22,8 +22,6 @@ int mosquitto_plugin_cleanup(void *userdata, struct mosquitto_opt *options, int 
     return go_mosq_plugin_cleanup(userdata, options, option_count);
 }
 
-int disconnect_cb_c(int event, void *event_data, void *userdata);
-
 typedef int (*mosq_event_cb)(int event, void *event_data, void *userdata);
 
 int register_event_callback(mosquitto_plugin_id_t *id, int event, mosq_event_cb cb) {

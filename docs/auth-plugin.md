@@ -1,12 +1,12 @@
 # 认证插件（PostgreSQL）当前实现说明
 
-本文档描述 `auth-plugin` 的当前实现，内容以源码为准（`authplugin/auth_plugin.c`、`authplugin/auth_cgo.go`、`authplugin/auth_db.go`、`authplugin/auth_types.go`、`authplugin/auth_logic.go`）。
+本文档描述 `auth-plugin` 的当前实现，内容以源码为准（`plugin/authplugin/auth_plugin.c`、`plugin/authplugin/auth_cgo.go`、`plugin/authplugin/auth_db.go`、`plugin/authplugin/auth_types.go`、`plugin/authplugin/auth_logic.go`）。
 
 当前功能范围（实现层面）：仅处理 CONNECT 认证（BASIC_AUTH），ACL 未启用；认证数据来源 PostgreSQL，不经 HTTP；每次认证结果写入 `client_auth_events`。
 
 ## 1. 组件与职责
 
-### 1.1 C 桥接层（`authplugin/auth_plugin.c`）
+### 1.1 C 桥接层（`plugin/authplugin/auth_plugin.c`）
 
 - 提供 Mosquitto 要求的三个入口函数：
   - `mosquitto_plugin_version`
@@ -19,10 +19,10 @@
 
 ### 1.2 Go 插件（按职责拆分）
 
-- `authplugin/auth_cgo.go`：Go 导出函数、回调注册、BASIC_AUTH 回调、日志封装。
-- `authplugin/auth_db.go`：连接池管理与数据库读写。
-- `authplugin/auth_types.go`：常量、SQL、结构体与全局配置。
-- `authplugin/auth_logic.go`：密码哈希逻辑（sha256 + salt）。
+- `plugin/authplugin/auth_cgo.go`：Go 导出函数、回调注册、BASIC_AUTH 回调、日志封装。
+- `plugin/authplugin/auth_db.go`：连接池管理与数据库读写。
+- `plugin/authplugin/auth_types.go`：常量、SQL、结构体与全局配置。
+- `plugin/authplugin/auth_logic.go`：密码哈希逻辑（sha256 + salt）。
 
 ### 1.3 CLI 工具（`cmd/bcryptgen`）
 
@@ -254,7 +254,7 @@ plugin /mosquitto/plugins/auth-plugin
 
 ## 12. 现有测试
 
-- `authplugin/auth_plugin_test.go` 覆盖：
+- `plugin/authplugin/auth_plugin_test.go` 覆盖：
   - `sha256PwdSalt`
   - `ctxTimeout`
 - 工具函数测试迁移到 `internal/pluginutil/strings_test.go`。

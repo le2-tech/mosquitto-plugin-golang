@@ -55,6 +55,12 @@ flowchart LR
     Q1["MOSQ_EVT_MESSAGE"] --> Q2["queue_cgo.go: message_cb_c"]
     Q2 --> Q3["转发到 RabbitMQ / 编码处理"]
   end
+
+  subgraph MsgStorePlugin["msgstoreplugin（规划）"]
+    P1["MOSQ_EVT_MESSAGE"] --> P2["msgstore_cgo.go: message_cb_c"]
+    P2 --> P3["快速入内存队列"]
+    P3 --> P4["后台 worker 写 PostgreSQL"]
+  end
 ```
 
 ## 关键桥接点说明

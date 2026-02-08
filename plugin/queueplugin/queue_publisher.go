@@ -50,9 +50,9 @@ func (p *amqpPublisher) ensureLocked() error {
 		}
 		p.nextDial = time.Time{}
 		p.conn = conn
-		if cfg.debug {
-			logKV(mosqLogInfo, "queue-plugin: connected to rabbitmq")
-		}
+		
+		log(mosqLogInfo, "queue-plugin: connected to rabbitmq")
+		
 	}
 	if p.ch == nil {
 		ch, err := p.conn.Channel()
@@ -62,9 +62,9 @@ func (p *amqpPublisher) ensureLocked() error {
 			return err
 		}
 		p.ch = ch
-		if cfg.debug {
-			debugLog("queue-plugin: channel opened")
-		}
+		
+		log(mosqLogDebug, "queue-plugin: channel opened")
+		
 	}
 	return nil
 }

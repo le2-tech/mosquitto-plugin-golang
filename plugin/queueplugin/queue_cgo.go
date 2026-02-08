@@ -19,10 +19,8 @@ import "C"
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"runtime/debug"
 	"strings"
@@ -34,35 +32,17 @@ import (
 
 var pid *C.mosquitto_plugin_id_t
 
-// mosqLog 写入 Mosquitto 的日志系统。
-func mosqLog(level C.int, msg string, args ...any) {
-	if len(args) > 0 {
-		msg = fmt.Sprintf(msg, args...)
-	}
-	cs := C.CString(msg)
+const (
+	mosqLogDebug   = int(C.MOSQ_LOG_DEBUG)
+	mosqLogInfo    = int(C.MOSQ_LOG_INFO)
+	mosqLogWarning = int(C.MOSQ_LOG_WARNING)
+	mosqLogError   = int(C.MOSQ_LOG_ERR)
+)
+
+func log(level int, msg string, fields ...map[string]any) {
+	cs := C.CString(pluginutil.FormatLogMessage(msg, fields...))
 	defer C.free(unsafe.Pointer(cs))
-	C.go_mosq_log(level, cs)
-}
-
-const mosqLogInfo = int(C.MOSQ_LOG_INFO)
-
-// logKV 以 key=value 形式输出结构化字段。
-func logKV(level int, msg string, kv ...any) {
-	var b strings.Builder
-	b.WriteString(msg)
-	for i := 0; i+1 < len(kv); i += 2 {
-		b.WriteString(" ")
-		b.WriteString(fmt.Sprintf("%v=%v", kv[i], kv[i+1]))
-	}
-	mosqLog(C.int(level), b.String())
-}
-
-// debugLog 在 queue_debug=true 时才输出。
-func debugLog(msg string, args ...any) {
-	if !cfg.debug {
-		return
-	}
-	mosqLog(C.MOSQ_LOG_DEBUG, msg, args...)
+	C.go_mosq_log(C.int(level), cs)
 }
 
 func cstr(s *C.char) string {
@@ -99,7 +79,7 @@ func failResult(err error) C.int {
 	if err == nil {
 		return C.MOSQ_ERR_SUCCESS
 	}
-	mosqLog(C.MOSQ_LOG_WARNING, "queue-plugin publish failed: %v", err)
+	log(mosqLogWarning, "queue-plugin publish failed", map[string]any{"error": err})
 	switch cfg.failMode {
 	case failModeDrop:
 		return C.MOSQ_ERR_SUCCESS
@@ -112,8 +92,9 @@ func failResult(err error) C.int {
 	}
 }
 
-//export go_mosq_plugin_version
 // go_mosq_plugin_version 选择最高支持的插件 API 版本。
+//
+//export go_mosq_plugin_version
 func go_mosq_plugin_version(count C.int, versions *C.int) C.int {
 	for _, v := range unsafe.Slice(versions, int(count)) {
 		if v == 5 {
@@ -123,14 +104,15 @@ func go_mosq_plugin_version(count C.int, versions *C.int) C.int {
 	return -1
 }
 
-//export go_mosq_plugin_init
 // go_mosq_plugin_init 解析配置、校验参数并注册回调。
+//
+//export go_mosq_plugin_init
 func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 	opts *C.struct_mosquitto_opt, optCount C.int) (rc C.int) {
 
 	defer func() {
 		if r := recover(); r != nil {
-			mosqLog(C.MOSQ_LOG_ERR, "queue-plugin: panic in plugin_init: %v\n%s", r, string(debug.Stack()))
+			log(mosqLogError, "queue-plugin: panic in plugin_init", map[string]any{"panic": r, "stack": string(debug.Stack())})
 			rc = C.MOSQ_ERR_UNKNOWN
 		}
 	}()
@@ -138,19 +120,15 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 	pid = id
 
 	cfg = config{
-		backend:         "rabbitmq",
-		exchangeType:    "direct",
-		timeout:         1000 * time.Millisecond,
-		failMode:        failModeDrop,
-		includeRetained: false,
-		debug:           false,
+		backend:      "rabbitmq",
+		exchangeType: "direct",
+		timeout:      1000 * time.Millisecond,
+		failMode:     failModeDrop,
 	}
 
 	if env := os.Getenv("QUEUE_DSN"); env != "" {
 		cfg.dsn = env
 	}
-
-	seenExcludeTopics := false
 
 	for _, o := range unsafe.Slice(opts, int(optCount)) {
 		k, v := cstr(o.key), cstr(o.value)
@@ -176,77 +154,35 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 			if dur, ok := pluginutil.ParseTimeoutMS(v); ok {
 				cfg.timeout = dur
 			} else {
-				mosqLog(C.MOSQ_LOG_WARNING, "queue-plugin: invalid queue_timeout_ms=%q, keeping %dms", v, int(cfg.timeout/time.Millisecond))
+				log(mosqLogWarning, "queue-plugin: invalid queue_timeout_ms", map[string]any{"value": v, "timeout_ms": int(cfg.timeout / time.Millisecond)})
 			}
 		case "queue_fail_mode":
 			if mode, ok := parseFailMode(v); ok {
 				cfg.failMode = mode
 			} else {
-				mosqLog(C.MOSQ_LOG_WARNING, "queue-plugin: invalid queue_fail_mode=%q, keeping %s", v, failModeString(cfg.failMode))
-			}
-		case "queue_debug":
-			if parsed, ok := pluginutil.ParseBoolOption(v); ok {
-				cfg.debug = parsed
-			} else {
-				mosqLog(C.MOSQ_LOG_WARNING, "queue-plugin: invalid queue_debug=%q, keeping %t", v, cfg.debug)
-			}
-		case "payload_encoding":
-			if strings.TrimSpace(strings.ToLower(v)) != "base64" {
-				mosqLog(C.MOSQ_LOG_WARNING, "queue-plugin: payload_encoding=%q not supported, forcing base64", v)
-			}
-		case "include_topics":
-			cfg.includeTopics = parseList(v)
-		case "exclude_topics":
-			cfg.excludeTopics = parseList(v)
-			seenExcludeTopics = true
-		case "include_users":
-			cfg.includeUsers = parseSet(v)
-		case "exclude_users":
-			cfg.excludeUsers = parseSet(v)
-		case "include_clients":
-			cfg.includeClients = parseSet(v)
-		case "exclude_clients":
-			cfg.excludeClients = parseSet(v)
-		case "include_retained":
-			if parsed, ok := pluginutil.ParseBoolOption(v); ok {
-				cfg.includeRetained = parsed
-			} else {
-				mosqLog(C.MOSQ_LOG_WARNING, "queue-plugin: invalid include_retained=%q, keeping %t", v, cfg.includeRetained)
+				log(mosqLogWarning, "queue-plugin: invalid queue_fail_mode", map[string]any{"value": v, "fail_mode": failModeString(cfg.failMode)})
 			}
 		}
 	}
 
-	if !seenExcludeTopics {
-		cfg.excludeTopics = []string{"$SYS/#"}
-	}
-
 	if cfg.backend != "rabbitmq" {
-		mosqLog(C.MOSQ_LOG_ERR, "queue-plugin: unsupported backend %q (expected rabbitmq)", cfg.backend)
+		log(mosqLogError, "queue-plugin: unsupported backend", map[string]any{"backend": cfg.backend, "expected": "rabbitmq"})
 		return C.MOSQ_ERR_INVAL
 	}
 	if cfg.exchangeType != "direct" {
-		mosqLog(C.MOSQ_LOG_ERR, "queue-plugin: exchange_type must be direct")
+		log(mosqLogError, "queue-plugin: exchange_type must be direct")
 		return C.MOSQ_ERR_INVAL
 	}
 	if cfg.dsn == "" || cfg.exchange == "" {
-		mosqLog(C.MOSQ_LOG_ERR, "queue-plugin: queue_dsn and queue_exchange must be set")
+		log(mosqLogError, "queue-plugin: queue_dsn and queue_exchange must be set")
 		return C.MOSQ_ERR_INVAL
 	}
 
-	logKV(mosqLogInfo, "queue-plugin: init",
-		"backend", cfg.backend,
-		"dsn", pluginutil.SafeDSN(cfg.dsn),
-		"exchange", cfg.exchange,
-		"exchange_type", cfg.exchangeType,
-		"routing_key", cfg.routingKey,
-		"queue", cfg.queueName,
-		"timeout_ms", int(cfg.timeout/time.Millisecond),
-		"fail_mode", failModeString(cfg.failMode),
-	)
+	log(mosqLogInfo, "queue-plugin: init", map[string]any{"backend": cfg.backend, "dsn": pluginutil.SafeDSN(cfg.dsn), "exchange": cfg.exchange, "exchange_type": cfg.exchangeType, "routing_key": cfg.routingKey, "queue": cfg.queueName, "timeout_ms": int(cfg.timeout / time.Millisecond), "fail_mode": failModeString(cfg.failMode)})
 
 	publisher.mu.Lock()
 	if err := publisher.ensureLocked(); err != nil {
-		mosqLog(C.MOSQ_LOG_WARNING, "queue-plugin: initial connect failed: %v", err)
+		log(mosqLogWarning, "queue-plugin: initial connect failed", map[string]any{"error": err})
 		publisher.closeLocked()
 	}
 	publisher.mu.Unlock()
@@ -255,23 +191,25 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 		return rc
 	}
 
-	mosqLog(C.MOSQ_LOG_INFO, "queue-plugin: plugin initialized")
+	log(mosqLogInfo, "queue-plugin: plugin initialized")
 	return C.MOSQ_ERR_SUCCESS
 }
 
-//export go_mosq_plugin_cleanup
 // go_mosq_plugin_cleanup 注销回调并释放 RabbitMQ 资源。
+//
+//export go_mosq_plugin_cleanup
 func go_mosq_plugin_cleanup(userdata unsafe.Pointer, opts *C.struct_mosquitto_opt, optCount C.int) C.int {
 	C.unregister_event_callback(pid, C.MOSQ_EVT_MESSAGE, C.mosq_event_cb(C.message_cb_c))
 	publisher.mu.Lock()
 	publisher.closeLocked()
 	publisher.mu.Unlock()
-	mosqLog(C.MOSQ_LOG_INFO, "queue-plugin: plugin cleaned up")
+	log(mosqLogInfo, "queue-plugin: plugin cleaned up")
 	return C.MOSQ_ERR_SUCCESS
 }
 
-//export message_cb_c
 // message_cb_c 在每次发布事件时被 Mosquitto 调用。
+//
+//export message_cb_c
 func message_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Pointer) C.int {
 	ed := (*C.struct_mosquitto_evt_message)(event_data)
 	if ed == nil {
@@ -290,9 +228,11 @@ func message_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Pointe
 		protocol = pluginutil.ProtocolString(int(C.mosquitto_client_protocol_version(ed.client)))
 	}
 
-	allow, reason := allowMessage(topic, username, clientID, bool(ed.retain))
+	allow, reason := allowMessage(topic)
 	if !allow {
-		debugLog("queue-plugin: filtered topic=%q client_id=%q username=%q reason=%s", topic, clientID, username, reason)
+
+		log(mosqLogDebug, "queue-plugin: filtered", map[string]any{"topic": topic, "reason": reason})
+
 		return C.MOSQ_ERR_SUCCESS
 	}
 
@@ -301,37 +241,27 @@ func message_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Pointe
 	if ed.payloadlen > C.uint32_t(maxPayloadLen) {
 		return failResult(errors.New("payload too large"))
 	}
-	var payload []byte
+	payload := ""
 	if payloadLen > 0 {
 		if ed.payload == nil {
 			return failResult(errors.New("payload is nil"))
 		}
-		payload = C.GoBytes(ed.payload, C.int(payloadLen))
+		payload = C.GoStringN((*C.char)(ed.payload), C.int(payloadLen))
 	}
 
 	msg := queueMessage{
-		TS:         time.Now().UTC().Format(time.RFC3339),
-		Topic:      topic,
-		PayloadB64: base64.StdEncoding.EncodeToString(payload),
-		QoS:        uint8(ed.qos),
-		Retain:     bool(ed.retain),
-		ClientID:   clientID,
-		Username:   username,
-		Peer:       peer,
-		Protocol:   protocol,
+		TS:       time.Now().UTC().Format(time.RFC3339),
+		Topic:    topic,
+		Payload:  payload,
+		QoS:      uint8(ed.qos),
+		Retain:   bool(ed.retain),
+		ClientID: clientID,
+		Username: username,
+		Peer:     peer,
+		Protocol: protocol,
 	}
 	msg.UserProperties = extractUserProperties(ed.properties)
-
-	logKV(int(C.MOSQ_LOG_DEBUG), "queue-plugin: publish",
-		"topic", topic,
-		"qos", ed.qos,
-		"retain", bool(ed.retain),
-		"len", payloadLen,
-		"client_id", clientID,
-		"username", username,
-		"user_props", len(msg.UserProperties),
-	)
-
+	log(mosqLogDebug, "queue-plugin: publish", map[string]any{"topic": topic, "qos": ed.qos, "retain": bool(ed.retain), "len": payloadLen, "client_id": clientID, "username": username, "user_props": len(msg.UserProperties)})
 	body, err := json.Marshal(msg)
 	if err != nil {
 		return failResult(err)
