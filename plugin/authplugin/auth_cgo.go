@@ -36,6 +36,17 @@ const (
 	mosqLogError   = int(C.MOSQ_LOG_ERR)
 )
 
+var (
+	dbAuthFn          = dbAuth
+	recordAuthEventFn = recordAuthEvent
+	infoLogger        = func(msg string, fields map[string]any) {
+		log(mosqLogInfo, msg, fields)
+	}
+	warnLogger = func(msg string, fields map[string]any) {
+		log(mosqLogWarning, msg, fields)
+	}
+)
+
 func log(level int, msg string, fields ...map[string]any) {
 	cs := C.CString(pluginutil.FormatLogMessage(msg, fields...))
 	defer C.free(unsafe.Pointer(cs))
@@ -92,6 +103,16 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 	}()
 
 	pid = id
+	pgDSN = ""
+	timeout = defaultTimeout
+	failOpen = false
+	poolMu.Lock()
+	if pool != nil {
+		pool.Close()
+		pool = nil
+	}
+	poolMu.Unlock()
+
 	if env := os.Getenv("PG_DSN"); env != "" {
 		pgDSN = env
 	}
@@ -128,7 +149,7 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 	// 数据库暂不可用时不阻塞插件加载
 	ctx, cancel := pluginutil.TimeoutContext(timeout)
 	defer cancel()
-	_, err := pluginutil.EnsureSharedPGPool(ctx, &poolMu, &pool, pgDSN)
+	_, err := ensureAuthPool(ctx)
 	if err != nil {
 		log(mosqLogWarning, "auth-plugin: initial pg connection failed", map[string]any{"error": err.Error()})
 	}
@@ -157,21 +178,21 @@ func go_mosq_plugin_cleanup(userdata unsafe.Pointer, opts *C.struct_mosquitto_op
 	return C.MOSQ_ERR_SUCCESS
 }
 
-// basic_auth_cb_c 执行认证逻辑并返回结果。
-//
-//export basic_auth_cb_c
-func basic_auth_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Pointer) C.int {
-	ed := (*C.struct_mosquitto_evt_basic_auth)(event_data)
-	password := cstr(ed.password)
-	info := clientInfoFromBasicAuth(ed)
+func authResultCode(allow bool) C.int {
+	if allow {
+		return C.MOSQ_ERR_SUCCESS
+	}
+	return C.MOSQ_ERR_AUTH
+}
 
-	dbAllow, dbReason, err := dbAuth(info.Username, password, info.ClientID)
+func runBasicAuth(info pluginutil.ClientInfo, password string) C.int {
+	dbAllow, dbReason, err := dbAuthFn(info.Username, password, info.ClientID)
 	allow, result, reason := dbAllow, authResultFail, dbReason
 	if err != nil {
-		log(mosqLogWarning, "auth-plugin auth error", map[string]any{"error": err.Error()})
+		warnLogger("auth-plugin auth error", map[string]any{"error": err.Error()})
 		reason = authReasonDBError
 		if failOpen {
-			log(mosqLogInfo, "auth-plugin: fail_open allow auth", map[string]any{"reason": authReasonDBError})
+			infoLogger("auth-plugin: fail_open allow auth", map[string]any{"reason": authReasonDBError})
 			allow = true
 			result = authResultSuccess
 			reason = authReasonDBErrorFailOpen
@@ -180,13 +201,24 @@ func basic_auth_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Poi
 		result = authResultSuccess
 	}
 
-	if err := recordAuthEvent(info, result, reason); err != nil {
-		log(mosqLogWarning, "auth-plugin auth event log failed", map[string]any{"error": err.Error()})
+	if err := recordAuthEventFn(info, result, reason); err != nil {
+		warnLogger("auth-plugin auth event log failed", map[string]any{"error": err.Error()})
 	}
-	if allow {
-		return C.MOSQ_ERR_SUCCESS
+	return authResultCode(allow)
+}
+
+// basic_auth_cb_c 执行认证逻辑并返回结果。
+//
+//export basic_auth_cb_c
+func basic_auth_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Pointer) C.int {
+	if event_data == nil {
+		warnLogger("auth-plugin: nil basic auth event_data", map[string]any{"event": int(event)})
+		return C.MOSQ_ERR_AUTH
 	}
-	return C.MOSQ_ERR_AUTH
+	ed := (*C.struct_mosquitto_evt_basic_auth)(event_data)
+	password := cstr(ed.password)
+	info := clientInfoFromBasicAuth(ed)
+	return runBasicAuth(info, password)
 }
 
 func main() {}

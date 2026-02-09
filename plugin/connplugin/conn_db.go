@@ -1,16 +1,30 @@
 package main
 
 import (
+	"context"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"mosquitto-plugin/internal/pluginutil"
 )
+
+func ensureConnPool(ctx context.Context) (*pgxpool.Pool, error) {
+	p, ev, err := pluginutil.EnsureSharedPGPool(ctx, &poolMu, &pool, pgDSN)
+	if err != nil {
+		return nil, err
+	}
+	if ev == pluginutil.PGPoolEventConnected {
+		log(mosqLogInfo, "conn-plugin: postgres pool connected", map[string]any{"pg_dsn": pluginutil.SafeDSN(pgDSN)})
+	}
+	return p, nil
+}
 
 func recordEvent(info pluginutil.ClientInfo, eventType string, reasonCode any) error {
 	ctx, cancel := pluginutil.TimeoutContext(timeout)
 	defer cancel()
 
-	p, err := pluginutil.EnsureSharedPGPool(ctx, &poolMu, &pool, pgDSN)
+	p, err := ensureConnPool(ctx)
 	if err != nil {
 		return err
 	}
@@ -38,6 +52,8 @@ func recordEvent(info pluginutil.ClientInfo, eventType string, reasonCode any) e
 	if err != nil {
 		return err
 	}
-	log(mosqLogDebug, "conn-plugin: recorded event", map[string]any{"event": eventType, "client_id": info.ClientID, "username": info.Username, "peer": info.Peer, "protocol": info.Protocol, "reason_code": reasonCode})
+	if pluginutil.ShouldSample(&debugRecordCounter, debugSampleEvery) {
+		log(mosqLogDebug, "conn-plugin: recorded event", map[string]any{"event": eventType, "client_id": info.ClientID, "username": info.Username, "peer": info.Peer, "protocol": info.Protocol, "reason_code": reasonCode})
+	}
 	return nil
 }

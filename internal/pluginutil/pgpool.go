@@ -2,12 +2,21 @@ package pluginutil
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// PGPoolEvent 表示 EnsureSharedPGPool 调用期间发生的池状态事件。
+type PGPoolEvent int
+
+const (
+	PGPoolEventNone PGPoolEvent = iota
+	PGPoolEventConnected
+)
+
+var newDefaultPGPool = NewDefaultPGPool
 
 // NewDefaultPGPool 使用统一默认参数创建并探活 PostgreSQL 连接池。
 func NewDefaultPGPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
@@ -37,26 +46,25 @@ func EnsureSharedPGPool(
 	mu *sync.RWMutex,
 	holder **pgxpool.Pool,
 	dsn string,
-) (*pgxpool.Pool, error) {
+) (*pgxpool.Pool, PGPoolEvent, error) {
 	mu.RLock()
 	if *holder != nil {
 		p := *holder
 		mu.RUnlock()
-		return p, nil
+		return p, PGPoolEventNone, nil
 	}
 	mu.RUnlock()
 
 	mu.Lock()
 	defer mu.Unlock()
 	if *holder != nil {
-		return *holder, nil
+		return *holder, PGPoolEventNone, nil
 	}
 
-	p, err := NewDefaultPGPool(ctx, dsn)
+	p, err := newDefaultPGPool(ctx, dsn)
 	if err != nil {
-		return nil, err
+		return nil, PGPoolEventNone, err
 	}
 	*holder = p
-	log.Printf("postgres pool connected dsn=%s", SafeDSN(dsn))
-	return p, nil
+	return p, PGPoolEventConnected, nil
 }

@@ -116,6 +116,6 @@ make build-conn
 
 ## 10. 测试建议
 
-- 当前无连接插件的单元测试（工具函数已迁移至 `internal/pluginutil` 测试）。
+- 当前已包含连接状态相关单元测试：`plugin/connplugin/conn_state_test.go`（覆盖断开清理与幂等逻辑）。
 - 集成测试：本地 Postgres 插入与 UPSERT 校验。
 - 压力测试：大量短连接下的写入延迟与丢弃率。

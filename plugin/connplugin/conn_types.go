@@ -34,14 +34,20 @@ ON CONFLICT (client_id) DO UPDATE SET
 const (
 	connEventTypeConnect    = "connect"
 	connEventTypeDisconnect = "disconnect"
+
+	defaultTimeout   = 1000 * time.Millisecond
+	debugSampleEvery = uint64(128)
 )
 
 var (
 	pool    *pgxpool.Pool
 	poolMu  sync.RWMutex
 	pgDSN   string
-	timeout = 1000 * time.Millisecond
+	timeout = defaultTimeout
 
 	activeConnMu sync.Mutex
 	activeConn   = map[uintptr]struct{}{}
+
+	debugSkipCounter   uint64
+	debugRecordCounter uint64
 )

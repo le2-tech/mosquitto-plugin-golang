@@ -42,7 +42,7 @@ func (p *amqpPublisher) ensureLocked() error {
 			return errors.New("queue-plugin: reconnect backoff")
 		}
 		conn, err := amqp.DialConfig(cfg.dsn, amqp.Config{
-			Dial: amqp.DefaultDial(cfg.timeout),
+			Dial: amqp.DefaultDial(cfg.publishTimeout),
 		})
 		if err != nil {
 			p.nextDial = time.Now().Add(1 * time.Second)
@@ -50,9 +50,7 @@ func (p *amqpPublisher) ensureLocked() error {
 		}
 		p.nextDial = time.Time{}
 		p.conn = conn
-		
 		log(mosqLogInfo, "queue-plugin: connected to rabbitmq")
-		
 	}
 	if p.ch == nil {
 		ch, err := p.conn.Channel()
@@ -62,9 +60,7 @@ func (p *amqpPublisher) ensureLocked() error {
 			return err
 		}
 		p.ch = ch
-		
 		log(mosqLogDebug, "queue-plugin: channel opened")
-		
 	}
 	return nil
 }

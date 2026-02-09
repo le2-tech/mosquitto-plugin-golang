@@ -37,7 +37,7 @@ func TestQueueMessageJSONIncludesUserProps(t *testing.T) {
 	msg := queueMessage{
 		TS:      "2026-01-24T04:00:19Z",
 		Topic:   "test/123",
-		Payload: "hello",
+		Payload: json.RawMessage(`{"k":"v"}`),
 		QoS:     1,
 		Retain:  true,
 		UserProperties: []userProperty{
@@ -52,5 +52,26 @@ func TestQueueMessageJSONIncludesUserProps(t *testing.T) {
 
 	if !strings.Contains(string(data), "\"user_properties\"") {
 		t.Fatalf("expected user_properties in JSON, got %s", string(data))
+	}
+	if !strings.Contains(string(data), "\"payload\":{\"k\":\"v\"}") {
+		t.Fatalf("expected payload as object in JSON, got %s", string(data))
+	}
+}
+
+func TestNormalizePayloadJSON(t *testing.T) {
+	obj, err := normalizePayloadJSON([]byte(`{"event":"gps"}`))
+	if err != nil {
+		t.Fatalf("object payload should be valid json: %v", err)
+	}
+	if string(obj) != `{"event":"gps"}` {
+		t.Fatalf("object payload mismatch: %s", string(obj))
+	}
+
+	if _, err := normalizePayloadJSON([]byte(`hello`)); err == nil {
+		t.Fatal("plain text payload should be rejected as invalid JSON")
+	}
+
+	if _, err := normalizePayloadJSON([]byte("  ")); err == nil {
+		t.Fatal("empty payload should be rejected as invalid JSON")
 	}
 }

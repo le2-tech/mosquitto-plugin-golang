@@ -12,6 +12,7 @@ mod:
 
 test:
 	go test ./...
+	go vet ./...
 
 mkdir:
 	mkdir -p $(BINARY_DIR)
@@ -34,7 +35,7 @@ run-bcryptgen:
 clean:
 	rm -rf $(BINARY_DIR)
 
-local-run: mod clean build-auth build-queue build-conn
+local-run: mod clean mkdir build-auth build-queue build-conn
 	mosquitto --version
 	PG_DSN=postgres://iot:ZDZrMegCF0i-saVU@127.0.0.1:7733/iot?sslmode=disable QUEUE_DSN=amqp://rabbitmq_user:passwd@127.0.0.1:7772/ mosquitto -c ./mosquitto.conf -v
 

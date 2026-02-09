@@ -18,7 +18,7 @@ void go_mosq_log(int level, const char* msg);
 import "C"
 
 import (
-	"context"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -52,6 +52,21 @@ func cstr(s *C.char) string {
 	return C.GoString(s)
 }
 
+func isBackpressureError(err error) bool {
+	return errors.Is(err, errQueueFull) || errors.Is(err, errEnqueueTimeout) || errors.Is(err, errDispatcherStopped)
+}
+
+func normalizePayloadJSON(payload []byte) (json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 {
+		return nil, errors.New("payload is empty or whitespace, not valid JSON")
+	}
+	if json.Valid(trimmed) {
+		return trimmed, nil
+	}
+	return nil, errors.New("payload is not valid JSON")
+}
+
 // extractUserProperties 从事件中读取 MQTT v5 用户属性。
 func extractUserProperties(props *C.mosquitto_property) []userProperty {
 	if props == nil {
@@ -79,7 +94,20 @@ func failResult(err error) C.int {
 	if err == nil {
 		return C.MOSQ_ERR_SUCCESS
 	}
-	log(mosqLogWarning, "queue-plugin publish failed", map[string]any{"error": err})
+	if isBackpressureError(err) {
+		level := mosqLogWarning
+		if cfg.failMode == failModeDrop {
+			level = mosqLogDebug
+		}
+		if pluginutil.ShouldSample(&backpressureCounter, debugSampleEvery) {
+			log(level, "queue-plugin publish backpressure", map[string]any{
+				"error":     err,
+				"fail_mode": failModeString(cfg.failMode),
+			})
+		}
+	} else {
+		log(mosqLogWarning, "queue-plugin publish failed", map[string]any{"error": err, "fail_mode": failModeString(cfg.failMode)})
+	}
 	switch cfg.failMode {
 	case failModeDrop:
 		return C.MOSQ_ERR_SUCCESS
@@ -118,12 +146,22 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 	}()
 
 	pid = id
+	debugFilterCounter = 0
+	debugPublishCounter = 0
+	workerWarnCounter = 0
+	backpressureCounter = 0
+	publisher.mu.Lock()
+	publisher.closeLocked()
+	publisher.nextDial = time.Time{}
+	publisher.mu.Unlock()
+	stopDispatcher()
 
 	cfg = config{
-		backend:      "rabbitmq",
-		exchangeType: "direct",
-		timeout:      1000 * time.Millisecond,
-		failMode:     failModeDrop,
+		backend:        "rabbitmq",
+		exchangeType:   "direct",
+		enqueueTimeout: 1000 * time.Millisecond,
+		publishTimeout: 1000 * time.Millisecond,
+		failMode:       failModeDrop,
 	}
 
 	if env := os.Getenv("QUEUE_DSN"); env != "" {
@@ -152,9 +190,23 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 			cfg.queueName = v
 		case "queue_timeout_ms":
 			if dur, ok := pluginutil.ParseTimeoutMS(v); ok {
-				cfg.timeout = dur
+				// 兼容旧配置：同时设置入队与发送超时。
+				cfg.enqueueTimeout = dur
+				cfg.publishTimeout = dur
 			} else {
-				log(mosqLogWarning, "queue-plugin: invalid queue_timeout_ms", map[string]any{"value": v, "timeout_ms": int(cfg.timeout / time.Millisecond)})
+				log(mosqLogWarning, "queue-plugin: invalid queue_timeout_ms", map[string]any{"value": v, "enqueue_timeout_ms": int(cfg.enqueueTimeout / time.Millisecond), "publish_timeout_ms": int(cfg.publishTimeout / time.Millisecond)})
+			}
+		case "queue_enqueue_timeout_ms":
+			if dur, ok := pluginutil.ParseTimeoutMS(v); ok {
+				cfg.enqueueTimeout = dur
+			} else {
+				log(mosqLogWarning, "queue-plugin: invalid queue_enqueue_timeout_ms", map[string]any{"value": v, "enqueue_timeout_ms": int(cfg.enqueueTimeout / time.Millisecond)})
+			}
+		case "queue_publish_timeout_ms":
+			if dur, ok := pluginutil.ParseTimeoutMS(v); ok {
+				cfg.publishTimeout = dur
+			} else {
+				log(mosqLogWarning, "queue-plugin: invalid queue_publish_timeout_ms", map[string]any{"value": v, "publish_timeout_ms": int(cfg.publishTimeout / time.Millisecond)})
 			}
 		case "queue_fail_mode":
 			if mode, ok := parseFailMode(v); ok {
@@ -178,7 +230,17 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 		return C.MOSQ_ERR_INVAL
 	}
 
-	log(mosqLogInfo, "queue-plugin: init", map[string]any{"backend": cfg.backend, "dsn": pluginutil.SafeDSN(cfg.dsn), "exchange": cfg.exchange, "exchange_type": cfg.exchangeType, "routing_key": cfg.routingKey, "queue": cfg.queueName, "timeout_ms": int(cfg.timeout / time.Millisecond), "fail_mode": failModeString(cfg.failMode)})
+	log(mosqLogInfo, "queue-plugin: init", map[string]any{
+		"backend":            cfg.backend,
+		"dsn":                pluginutil.SafeDSN(cfg.dsn),
+		"exchange":           cfg.exchange,
+		"exchange_type":      cfg.exchangeType,
+		"routing_key":        cfg.routingKey,
+		"queue":              cfg.queueName,
+		"enqueue_timeout_ms": int(cfg.enqueueTimeout / time.Millisecond),
+		"publish_timeout_ms": int(cfg.publishTimeout / time.Millisecond),
+		"fail_mode":          failModeString(cfg.failMode),
+	})
 
 	publisher.mu.Lock()
 	if err := publisher.ensureLocked(); err != nil {
@@ -187,7 +249,9 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 	}
 	publisher.mu.Unlock()
 
+	startDispatcher(defaultDispatchBuffer)
 	if rc := C.register_event_callback(pid, C.MOSQ_EVT_MESSAGE, C.mosq_event_cb(C.message_cb_c)); rc != C.MOSQ_ERR_SUCCESS {
+		stopDispatcher()
 		return rc
 	}
 
@@ -200,8 +264,10 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 //export go_mosq_plugin_cleanup
 func go_mosq_plugin_cleanup(userdata unsafe.Pointer, opts *C.struct_mosquitto_opt, optCount C.int) C.int {
 	C.unregister_event_callback(pid, C.MOSQ_EVT_MESSAGE, C.mosq_event_cb(C.message_cb_c))
+	stopDispatcher()
 	publisher.mu.Lock()
 	publisher.closeLocked()
+	publisher.nextDial = time.Time{}
 	publisher.mu.Unlock()
 	log(mosqLogInfo, "queue-plugin: plugin cleaned up")
 	return C.MOSQ_ERR_SUCCESS
@@ -230,9 +296,9 @@ func message_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Pointe
 
 	allow, reason := allowMessage(topic)
 	if !allow {
-
-		log(mosqLogDebug, "queue-plugin: filtered", map[string]any{"topic": topic, "reason": reason})
-
+		if pluginutil.ShouldSample(&debugFilterCounter, debugSampleEvery) {
+			log(mosqLogDebug, "queue-plugin: filtered", map[string]any{"topic": topic, "reason": reason})
+		}
 		return C.MOSQ_ERR_SUCCESS
 	}
 
@@ -241,12 +307,18 @@ func message_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Pointe
 	if ed.payloadlen > C.uint32_t(maxPayloadLen) {
 		return failResult(errors.New("payload too large"))
 	}
-	payload := ""
+	var payload json.RawMessage
 	if payloadLen > 0 {
 		if ed.payload == nil {
 			return failResult(errors.New("payload is nil"))
 		}
-		payload = C.GoStringN((*C.char)(ed.payload), C.int(payloadLen))
+		var err error
+		payload, err = normalizePayloadJSON(C.GoBytes(ed.payload, C.int(payloadLen)))
+		if err != nil {
+			return failResult(err)
+		}
+	} else {
+		return failResult(errors.New("payload is empty, valid JSON required"))
 	}
 
 	msg := queueMessage{
@@ -261,16 +333,14 @@ func message_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Pointe
 		Protocol: protocol,
 	}
 	msg.UserProperties = extractUserProperties(ed.properties)
-	log(mosqLogDebug, "queue-plugin: publish", map[string]any{"topic": topic, "qos": ed.qos, "retain": bool(ed.retain), "len": payloadLen, "client_id": clientID, "username": username, "user_props": len(msg.UserProperties)})
+	if pluginutil.ShouldSample(&debugPublishCounter, debugSampleEvery) {
+		log(mosqLogDebug, "queue-plugin: publish", map[string]any{"topic": topic, "qos": ed.qos, "retain": bool(ed.retain), "len": payloadLen, "client_id": clientID, "username": username, "user_props": len(msg.UserProperties)})
+	}
 	body, err := json.Marshal(msg)
 	if err != nil {
 		return failResult(err)
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
-	defer cancel()
-
-	return failResult(publisher.Publish(ctx, body))
+	return failResult(enqueueMessage(body))
 }
 
 func main() {}

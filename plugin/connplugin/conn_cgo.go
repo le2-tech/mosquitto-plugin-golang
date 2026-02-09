@@ -44,6 +44,15 @@ func log(level int, msg string, fields ...map[string]any) {
 	C.go_mosq_log(C.int(level), cs)
 }
 
+var (
+	debugLogger = func(msg string, fields map[string]any) {
+		log(mosqLogDebug, msg, fields)
+	}
+	warnLogger = func(msg string, fields map[string]any) {
+		log(mosqLogWarning, msg, fields)
+	}
+)
+
 func cstr(s *C.char) string {
 	if s == nil {
 		return ""
@@ -58,11 +67,7 @@ func connKey(client *C.struct_mosquitto) (uintptr, bool) {
 	return uintptr(unsafe.Pointer(client)), true
 }
 
-func setConnected(client *C.struct_mosquitto, on bool) {
-	key, ok := connKey(client)
-	if !ok {
-		return
-	}
+func setConnectedByKey(key uintptr, on bool) {
 	activeConnMu.Lock()
 	if on {
 		activeConn[key] = struct{}{}
@@ -72,15 +77,43 @@ func setConnected(client *C.struct_mosquitto, on bool) {
 	activeConnMu.Unlock()
 }
 
-func connected(client *C.struct_mosquitto) bool {
-	key, ok := connKey(client)
-	if !ok {
-		return false
-	}
+func connectedByKey(key uintptr) bool {
 	activeConnMu.Lock()
-	_, ok = activeConn[key]
+	_, ok := activeConn[key]
 	activeConnMu.Unlock()
 	return ok
+}
+
+func takeConnectedByKey(key uintptr) bool {
+	activeConnMu.Lock()
+	_, ok := activeConn[key]
+	if ok {
+		delete(activeConn, key)
+	}
+	activeConnMu.Unlock()
+	return ok
+}
+
+func setConnected(client *C.struct_mosquitto, on bool) {
+	key, ok := connKey(client)
+	if !ok {
+		return
+	}
+	setConnectedByKey(key, on)
+}
+
+func handleDisconnectByKey(key uintptr, record func() error) {
+	// 原子地 “检查并清除” 连接状态，避免并发下重复记录 disconnect。
+	if !takeConnectedByKey(key) {
+		if pluginutil.ShouldSample(&debugSkipCounter, debugSampleEvery) {
+			debugLogger("conn-plugin: skip disconnect record", map[string]any{"client_ptr": key})
+		}
+		return
+	}
+
+	if err := record(); err != nil {
+		warnLogger("conn-plugin: record disconnect event failed", map[string]any{"error": err.Error()})
+	}
 }
 
 func clientInfoFromClient(client *C.struct_mosquitto) pluginutil.ClientInfo {
@@ -117,6 +150,20 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 	}()
 
 	pid = id
+	pgDSN = ""
+	timeout = defaultTimeout
+	debugSkipCounter = 0
+	debugRecordCounter = 0
+	poolMu.Lock()
+	if pool != nil {
+		pool.Close()
+		pool = nil
+	}
+	poolMu.Unlock()
+	activeConnMu.Lock()
+	activeConn = map[uintptr]struct{}{}
+	activeConnMu.Unlock()
+
 	if env := os.Getenv("PG_DSN"); env != "" {
 		pgDSN = env
 	}
@@ -147,7 +194,7 @@ func go_mosq_plugin_init(id *C.mosquitto_plugin_id_t, userdata *unsafe.Pointer,
 
 	ctx, cancel := pluginutil.TimeoutContext(timeout)
 	defer cancel()
-	_, err := pluginutil.EnsureSharedPGPool(ctx, &poolMu, &pool, pgDSN)
+	_, err := ensureConnPool(ctx)
 	if err != nil {
 		log(mosqLogWarning, "conn-plugin: initial pg connection failed", map[string]any{"error": err.Error()})
 	}
@@ -204,17 +251,13 @@ func disconnect_cb_c(event C.int, event_data unsafe.Pointer, userdata unsafe.Poi
 	if ed == nil {
 		return C.MOSQ_ERR_SUCCESS
 	}
-
-	if !connected(ed.client) {
-		log(mosqLogDebug, "conn-plugin: skip disconnect record", map[string]any{"client_ptr": uintptr(unsafe.Pointer(ed.client))})
+	key, ok := connKey(ed.client)
+	if !ok {
 		return C.MOSQ_ERR_SUCCESS
 	}
-
-	if err := recordEvent(clientInfoFromClient(ed.client), connEventTypeDisconnect, int(ed.reason)); err != nil {
-		log(mosqLogWarning, "conn-plugin: record disconnect event failed", map[string]any{"error": err.Error()})
-		return C.MOSQ_ERR_SUCCESS
-	}
-	setConnected(ed.client, false)
+	handleDisconnectByKey(key, func() error {
+		return recordEvent(clientInfoFromClient(ed.client), connEventTypeDisconnect, int(ed.reason))
+	})
 	return C.MOSQ_ERR_SUCCESS
 }
 

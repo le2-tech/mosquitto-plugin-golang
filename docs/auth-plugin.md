@@ -1,6 +1,6 @@
 # 认证插件（PostgreSQL）当前实现说明
 
-本文档描述 `auth-plugin` 的当前实现，内容以源码为准（`plugin/authplugin/auth_plugin.c`、`plugin/authplugin/auth_cgo.go`、`plugin/authplugin/auth_db.go`、`plugin/authplugin/auth_types.go`、`plugin/authplugin/auth_logic.go`）。
+本文档描述 `auth-plugin` 的当前实现，内容以源码为准（`plugin/authplugin/auth_plugin.c`、`plugin/authplugin/auth_cgo.go`、`plugin/authplugin/auth_db.go`、`plugin/authplugin/auth_types.go`、`internal/pluginutil/hash.go`）。
 
 当前功能范围（实现层面）：仅处理 CONNECT 认证（BASIC_AUTH），ACL 未启用；认证数据来源 PostgreSQL，不经 HTTP；每次认证结果写入 `client_auth_events`。
 
@@ -22,12 +22,12 @@
 - `plugin/authplugin/auth_cgo.go`：Go 导出函数、回调注册、BASIC_AUTH 回调、日志封装。
 - `plugin/authplugin/auth_db.go`：连接池管理与数据库读写。
 - `plugin/authplugin/auth_types.go`：常量、SQL、结构体与全局配置。
-- `plugin/authplugin/auth_logic.go`：密码哈希逻辑（sha256 + salt）。
+- `internal/pluginutil/hash.go`：密码哈希逻辑（sha256 + salt）。
 
 ### 1.3 CLI 工具（`cmd/bcryptgen`）
 
 - 名称为 `bcryptgen`，但**实际算法是 sha256(password + salt)**，输出十六进制字符串。
-- 参数：`-salt` 指定盐值；未提供密码时从 stdin 读取。
+- 参数：`-salt` 指定盐值，`-password` 指定明文密码。
 
 ## 2. 运行时流程
 
@@ -83,7 +83,7 @@
 ### 4.2 认证流程（`dbAuth`）
 
 1. `username` 或 `password` 为空：拒绝（`missing_credentials`）。
-2. `ensurePool` 确保连接池可用（必要时延迟创建）。
+2. `ensureAuthPool` 确保连接池可用（必要时延迟创建）。
 3. 查询用户：
 
    ```sql
@@ -120,13 +120,12 @@
 
 ## 6. 数据库表要求（以代码为准）
 
-> 注意：仓库中的 `scripts/init_db.sql` 与此处不一致（详见第 8 节）。
-
 ### 6.1 mqtt_accounts（认证主表）
 
 必须存在字段（字段类型由代码读取方式决定）：
 
 - `user_name`（文本）
+- `clientid`（文本，可空；查询会使用 `clientid=$2 OR clientid IS NULL`）
 - `password_hash`（文本，`sha256(password + salt)` 的十六进制）
 - `salt`（文本）
 - `enabled`（会被扫描为 `int16`，需支持 0/1）
@@ -166,17 +165,17 @@ CREATE INDEX IF NOT EXISTS client_auth_events_ts_idx
 当前实现与脚本/历史说明存在明显偏差，后续扩展前需要统一：
 
 - 历史说明宣称支持 **ACL**，但当前代码未注册 ACL 回调。
-- `scripts/init_db.sql` 使用表 `users` / `acls`，
-  但当前代码实际查询 **`mqtt_accounts`**（字段 `user_name`）。
-- 历史说明/脚本描述 **bcrypt**，但 `cmd/bcryptgen` 与插件逻辑使用 **sha256(password + salt)**。
+- 工具名为 `bcryptgen`，但实际算法是 `sha256(password + salt)`。
+- 认证查询表为 `mqtt_accounts`，不是历史文档中的 `users`。
 
 ## 9. 构建与本地运行（示例流程）
 
-1. 准备数据库：可先运行 `./scripts/init_db.sh` 创建数据库/角色（默认 `PGHOST=127.0.0.1`、`PGPORT=5432`、`PGUSER=postgres`、`PGDATABASE=mqtt`、`MQTT_DB_USER=mqtt_auth`、`MQTT_DB_PASS=StrongPass`）。该脚本会创建 `users/acls`，**不包含**当前实现需要的 `mqtt_accounts`，需补充如下表结构：
+1. 在 PostgreSQL 中准备如下表结构：
 
 ```sql
 CREATE TABLE IF NOT EXISTS mqtt_accounts (
   user_name     TEXT PRIMARY KEY,
+  clientid      TEXT,
   password_hash TEXT NOT NULL,
   salt          TEXT NOT NULL,
   enabled       SMALLINT NOT NULL DEFAULT 1,
@@ -185,22 +184,20 @@ CREATE TABLE IF NOT EXISTS mqtt_accounts (
 
 ```
 
-脚本会输出 DSN，可用于 `plugin_opt_pg_dsn`。
-
 2. 生成密码 hash（sha256 + salt）：
 
 ```bash
-make bcryptgen
-./plugins/bcryptgen -salt 'SALT' 'alice-password'
+go run ./cmd/bcryptgen -salt 'SALT' -password 'alice-password'
 ```
 
 将输出值写入 `mqtt_accounts.password_hash`。示例：
 
 ```sql
-INSERT INTO mqtt_accounts (user_name, password_hash, salt, enabled)
-VALUES ('alice', '<hash>', 'SALT', 1)
+INSERT INTO mqtt_accounts (user_name, clientid, password_hash, salt, enabled)
+VALUES ('alice', NULL, '<hash>', 'SALT', 1)
 ON CONFLICT (user_name) DO UPDATE
-  SET password_hash = EXCLUDED.password_hash,
+  SET clientid = EXCLUDED.clientid,
+      password_hash = EXCLUDED.password_hash,
       salt = EXCLUDED.salt,
       enabled = EXCLUDED.enabled;
 ```
@@ -255,7 +252,6 @@ plugin /mosquitto/plugins/auth-plugin
 ## 12. 现有测试
 
 - `plugin/authplugin/auth_plugin_test.go` 覆盖：
-  - `sha256PwdSalt`
   - `ctxTimeout`
-- 工具函数测试迁移到 `internal/pluginutil/strings_test.go`。
+- 工具函数测试在 `internal/pluginutil/hash_test.go`、`internal/pluginutil/strings_test.go`。
 - 目前无数据库/插件回调的集成测试。

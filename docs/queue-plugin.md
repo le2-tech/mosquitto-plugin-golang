@@ -11,10 +11,10 @@
 - 后端：RabbitMQ（AMQP 0-9-1）。
 - Exchange：`direct`，Routing key 由配置项指定。
 - Queue：由运维预创建并绑定，插件不声明/不绑定。
-- 消息格式：固定为 JSON（文本 payload 置于 `payload`）。
+- 消息格式：固定为 JSON（`payload` 优先按 JSON 原样内嵌）。
 - MQTT v5 properties：仅携带 `user_properties`。
 - 过滤策略：仅内置过滤 `$SYS/#` 主题。
-- 发送策略：回调内直接发送，短超时，失败默认丢弃（`fail_mode=drop`）。
+- 发送策略：回调快速入内存队列，后台 worker 异步发送到 RabbitMQ。
 
 ## 2. 触发点与处理流程
 
@@ -31,20 +31,24 @@ MQTT Client
     ▼
 Mosquitto (MOSQ_EVT_MESSAGE)
     │
-    ├─(快速过滤/拷贝 payload)
+    ├─(快速过滤/拷贝 payload/入队)
     │
-    └─> 本插件：直接发送（带超时） -> RabbitMQ
+    └─> queueplugin 内存队列 -> worker 异步发送 -> RabbitMQ
 ```
 
 ## 3. 消息格式
 
-### 3.1 固定 JSON（文本 payload）
+### 3.1 固定 JSON（payload 优先内嵌 JSON）
 
 ```json
 {
   "ts": "2025-01-23T17:00:00Z",
   "topic": "devices/alice/up",
-  "payload": "hello",
+  "payload": {
+    "event": "gps",
+    "terminal_id": "013912345682",
+    "ts": 1770602938
+  },
   "qos": 1,
   "retain": false,
   "client_id": "client-1",
@@ -57,7 +61,8 @@ Mosquitto (MOSQ_EVT_MESSAGE)
 
 说明：
 
-- `payload`：文本内容（UTF-8）。
+- `payload`：仅接受合法 JSON（对象/数组/标量均可），并按 JSON 原样写入。
+- `payload`：若 MQTT payload 不是合法 JSON（含空 payload），本条消息按 `fail_mode` 进入失败处理路径。
 - `ts`：UTC RFC3339。
 - 部分字段取决于 Mosquitto 事件结构体是否提供，无法获取时可省略。
 
@@ -94,8 +99,11 @@ Mosquitto (MOSQ_EVT_MESSAGE)
 
 发送与失败策略：
 
-- `plugin_opt_queue_timeout_ms`：发送超时（默认 1000）。
-- `plugin_opt_queue_fail_mode`：`drop`/`block`/`disconnect`（默认 `drop`）。
+- `plugin_opt_queue_timeout_ms`：兼容旧参数，同时设置入队与发送超时（默认 1000ms）。
+- `plugin_opt_queue_enqueue_timeout_ms`：`block` 模式下入队等待时长（默认 1000ms）。
+- `plugin_opt_queue_publish_timeout_ms`：后台发送与 AMQP 拨号超时（默认 1000ms）。
+- `plugin_opt_queue_fail_mode`：入队失败（队列满/停止）时处理策略，`drop`/`block`/`disconnect`（默认 `drop`）。
+- 内部内存队列为固定大小（当前实现默认 4096）。
 - 调试日志由 Mosquitto `log_type` 控制（例如启用 `log_type debug`）。
 
 **注意：** DSN 等敏感信息需在日志中脱敏。
@@ -119,9 +127,10 @@ plugin_opt_queue_fail_mode drop
 
 ## 8. 可靠性与失败策略
 
-- 回调内直接发送（无内部缓冲/批量）。
-- 通过短超时限制阻塞时长。
-- 队列不可用时按 `fail_mode` 执行，默认 `drop`。
+- 回调阶段仅做入队，RabbitMQ 写入由后台 worker 异步完成。
+- 入队失败按 `fail_mode` 执行，默认 `drop`。
+- 后台发送失败只记录日志，不影响已经返回给 MQTT 客户端的回调结果。
+- 插件停止时 worker 立即退出，内存队列中未发送消息可能丢失（以换取可预测的快速关停）。
 
 ## 9. 安全与合规
 
@@ -137,6 +146,7 @@ plugin_opt_queue_fail_mode drop
 │   ├── queue_bridge.c        # C 侧入口与包装函数
 │   ├── queue_cgo.go          # Go 导出函数/回调与 C 交互
 │   ├── queue_config.go       # 配置解析
+│   ├── queue_dispatcher.go   # 内存队列与异步 worker
 │   ├── queue_filters.go      # 过滤规则
 │   ├── queue_publisher.go    # RabbitMQ 发布器
 │   └── queue_types.go        # 类型与全局配置
